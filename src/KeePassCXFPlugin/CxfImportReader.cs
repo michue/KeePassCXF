@@ -4,8 +4,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.Serialization;
-using System.Runtime.Serialization.Json;
 using System.Text;
+using System.Web.Script.Serialization;
 using KeePassLib;
 using KeePassLib.Interfaces;
 using KeePassLib.Security;
@@ -26,11 +26,23 @@ internal static class CxfImportReader
 		CxfExportWriter.CxfHeader document;
 		try
 		{
-			var serializer = new DataContractJsonSerializer(typeof(CxfExportWriter.CxfHeader));
-			document = (CxfExportWriter.CxfHeader)serializer.ReadObject(input);
+			var serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue, RecursionLimit = 100 };
+			using (var reader = new StreamReader(input, Encoding.UTF8, true, 4096, true))
+			{
+				var root = AsObject(serializer.DeserializeObject(reader.ReadToEnd()), "CXF document");
+				document = ParseDocument(root);
+			}
 			ValidateHeader(document);
 		}
 		catch (SerializationException ex)
+		{
+			throw ReportInvalidDocument(statusLogger, ex);
+		}
+		catch (InvalidOperationException ex)
+		{
+			throw ReportInvalidDocument(statusLogger, ex);
+		}
+		catch (ArgumentException ex)
 		{
 			throw ReportInvalidDocument(statusLogger, ex);
 		}
@@ -81,6 +93,121 @@ internal static class CxfImportReader
 		foreach (var entry in importedEntries)
 			database.RootGroup.AddEntry(entry, true);
 		statusLogger.SetText($"Imported {credentialsRead} passkey(s).", LogStatusType.Info);
+	}
+
+	private static CxfExportWriter.CxfHeader ParseDocument(Dictionary<string, object> root)
+	{
+		var version = AsObject(GetValue(root, "version"), "version");
+		var accounts = AsArray(GetValue(root, "accounts"), "accounts");
+		var parsedAccounts = new List<CxfExportWriter.CxfAccount>();
+		foreach (var value in accounts)
+		{
+			var account = AsObject(value, "account");
+			var itemsValue = GetValue(account, "items");
+			var items = itemsValue == null ? Array.Empty<object>() : AsArray(itemsValue, "items");
+			var parsedItems = new List<CxfExportWriter.CxfItem>();
+			foreach (var itemValue in items)
+			{
+				var item = AsObject(itemValue, "item");
+				var credentialValues = GetValue(item, "credentials");
+				var credentialArray = credentialValues == null ? Array.Empty<object>() : AsArray(credentialValues, "credentials");
+				var credentials = new List<CxfExportWriter.CxfPasskey>();
+				foreach (var credentialValue in credentialArray)
+				{
+					var credential = AsObject(credentialValue, "credential");
+					var type = GetString(credential, "type");
+					if (!string.Equals(type, "passkey", StringComparison.Ordinal))
+					{
+						credentials.Add(new CxfExportWriter.CxfPasskey { Type = type });
+						continue;
+					}
+
+					credentials.Add(new CxfExportWriter.CxfPasskey
+					{
+						Type = type,
+						CredentialId = GetString(credential, "credentialId"),
+						RpId = GetString(credential, "rpId"),
+						Username = GetString(credential, "username"),
+						UserDisplayName = GetString(credential, "userDisplayName"),
+						UserHandle = GetString(credential, "userHandle"),
+						Key = GetString(credential, "key"),
+					});
+				}
+
+				parsedItems.Add(new CxfExportWriter.CxfItem
+				{
+					Id = GetString(item, "id"),
+					CreationAt = GetNullableInt64(item, "creationAt"),
+					ModifiedAt = GetNullableInt64(item, "modifiedAt"),
+					Title = GetString(item, "title"),
+					Credentials = credentials.ToArray(),
+				});
+			}
+
+			parsedAccounts.Add(new CxfExportWriter.CxfAccount
+			{
+				Id = GetString(account, "id"),
+				Username = GetString(account, "username"),
+				Email = GetString(account, "email"),
+				Items = parsedItems.ToArray(),
+			});
+		}
+
+		return new CxfExportWriter.CxfHeader
+		{
+			Version = new CxfExportWriter.CxfVersion
+			{
+				Major = GetInt32(version, "major"),
+				Minor = GetInt32(version, "minor"),
+			},
+			ExporterRpId = GetString(root, "exporterRpId"),
+			ExporterDisplayName = GetString(root, "exporterDisplayName"),
+			Timestamp = GetInt64(root, "timestamp"),
+			Accounts = parsedAccounts.ToArray(),
+		};
+	}
+
+	private static Dictionary<string, object> AsObject(object value, string name) =>
+		value as Dictionary<string, object>
+		?? throw new SerializationException($"The CXF {name} must be a JSON object.");
+
+	private static object[] AsArray(object value, string name) =>
+		value as object[]
+		?? throw new SerializationException($"The CXF {name} must be a JSON array.");
+
+	private static object GetValue(Dictionary<string, object> value, string name) =>
+		value.TryGetValue(name, out var result) ? result : null;
+
+	private static string GetString(Dictionary<string, object> value, string name)
+	{
+		object result = GetValue(value, name);
+		if (result == null) return null;
+		if (result is string text) return text;
+		throw new SerializationException($"The CXF field '{name}' must be a string.");
+	}
+
+	private static int GetInt32(Dictionary<string, object> value, string name)
+	{
+		long result = GetInt64(value, name);
+		if (result < int.MinValue || result > int.MaxValue)
+			throw new SerializationException($"The CXF field '{name}' is out of range.");
+		return (int)result;
+	}
+
+	private static long GetInt64(Dictionary<string, object> value, string name)
+	{
+		object result = GetValue(value, name);
+		if (result is int int32) return int32;
+		if (result is long int64) return int64;
+		if (result is decimal decimalValue && decimal.Truncate(decimalValue) == decimalValue
+			&& decimalValue >= long.MinValue && decimalValue <= long.MaxValue)
+			return (long)decimalValue;
+		throw new SerializationException($"The CXF field '{name}' must be an integer.");
+	}
+
+	private static long? GetNullableInt64(Dictionary<string, object> value, string name)
+	{
+		return GetValue(value, name) == null ? (long?)null : GetInt64(value, name);
 	}
 
 	private static void ValidateHeader(CxfExportWriter.CxfHeader document)

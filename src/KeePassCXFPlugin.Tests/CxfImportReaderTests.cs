@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 using System;
 using System.IO;
+using System.Linq;
 using System.Text;
 using KeePass.DataExchange;
 using KeePassCXF;
@@ -81,6 +82,23 @@ public class CxfImportReaderTests
 		{
 			Assert.Throws<InvalidDataException>(() => new CxfFileFormatProvider().Import(database, input, new TestStatusLogger()));
 			Assert.Equal((uint)0, database.RootGroup.GetEntries(true).UCount);
+		}
+	}
+
+	[Fact]
+	public void ImportTestData_ImportsEveryExampleWithoutError()
+	{
+		string fixtureDirectory = Path.Combine(AppContext.BaseDirectory, "TestData", "Import");
+		string[] files = Directory.GetFiles(fixtureDirectory, "*.json", SearchOption.AllDirectories)
+			.OrderBy(path => path, StringComparer.Ordinal).ToArray();
+
+		foreach (string file in files)
+		{
+			var database = NewDatabase();
+			using (var input = File.OpenRead(file))
+			{
+				new CxfFileFormatProvider().Import(database, input, new TestStatusLogger());
+			}
 		}
 	}
 
