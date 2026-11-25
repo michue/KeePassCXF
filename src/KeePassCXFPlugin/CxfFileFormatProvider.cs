@@ -8,8 +8,9 @@ namespace KeePassCXF;
 
 internal sealed class CxfFileFormatProvider : FileFormatProvider
 {
-	public override bool SupportsImport => false;
+	public override bool SupportsImport => true;
 	public override bool SupportsExport => true;
+	public override bool ImportAppendsToRootGroupOnly => true;
 	public override bool RequiresFile => true;
 	public override string FormatName => "Client Exchange Format (CXF)";
 	public override string DefaultExtension => "json";
@@ -17,7 +18,7 @@ internal sealed class CxfFileFormatProvider : FileFormatProvider
 
 	public override void Import(PwDatabase pwStorage, System.IO.Stream sInput, IStatusLogger slLogger)
 	{
-		throw new System.NotSupportedException("CXF import is not supported yet.");
+		CxfImportReader.Import(pwStorage, sInput, slLogger);
 	}
 
 	public override bool Export(PwExportInfo pwExportInfo, System.IO.Stream sOutput, IStatusLogger slLogger)

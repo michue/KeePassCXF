@@ -203,7 +203,7 @@ internal static class CxfExportWriter
 		Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
 	[DataContract]
-	private sealed class CxfHeader
+	internal sealed class CxfHeader
 	{
 		[DataMember(Name = "version", Order = 0)] public CxfVersion Version { get; set; }
 		[DataMember(Name = "exporterRpId", Order = 1)] public string ExporterRpId { get; set; }
@@ -213,14 +213,14 @@ internal static class CxfExportWriter
 	}
 
 	[DataContract]
-	private sealed class CxfVersion
+	internal sealed class CxfVersion
 	{
 		[DataMember(Name = "major", Order = 0)] public int Major { get; set; }
 		[DataMember(Name = "minor", Order = 1)] public int Minor { get; set; }
 	}
 
 	[DataContract]
-	private sealed class CxfAccount
+	internal sealed class CxfAccount
 	{
 		[DataMember(Name = "id", Order = 0)] public string Id { get; set; }
 		[DataMember(Name = "username", Order = 1)] public string Username { get; set; }
@@ -230,22 +230,22 @@ internal static class CxfExportWriter
 	}
 
 	[DataContract]
-	private sealed class CxfCollection
+	internal sealed class CxfCollection
 	{
 	}
 
 	[DataContract]
-	private sealed class CxfItem
+	internal sealed class CxfItem
 	{
 		[DataMember(Name = "id", Order = 0)] public string Id { get; set; }
-		[DataMember(Name = "creationAt", Order = 1)] public long CreationAt { get; set; }
-		[DataMember(Name = "modifiedAt", Order = 2)] public long ModifiedAt { get; set; }
+		[DataMember(Name = "creationAt", Order = 1, EmitDefaultValue = false)] public long? CreationAt { get; set; }
+		[DataMember(Name = "modifiedAt", Order = 2, EmitDefaultValue = false)] public long? ModifiedAt { get; set; }
 		[DataMember(Name = "title", Order = 3)] public string Title { get; set; }
 		[DataMember(Name = "credentials", Order = 4)] public CxfPasskey[] Credentials { get; set; }
 	}
 
 	[DataContract]
-	private sealed class CxfPasskey
+	internal sealed class CxfPasskey
 	{
 		[DataMember(Name = "type", Order = 0)] public string Type { get; set; }
 		[DataMember(Name = "credentialId", Order = 1)] public string CredentialId { get; set; }

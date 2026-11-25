@@ -37,10 +37,10 @@ public class CxfExportWriterTests
 		Assert.Contains("\"minor\":0", json);
 		Assert.Contains("\"exporterDisplayName\":\"KeePassCXF\"", json);
 		Assert.Contains("\"type\":\"passkey\"", json);
-		Assert.Contains("\"credentialId\":\"credential-id\"", json);
+		Assert.Contains("\"credentialId\":\"Y3JlZGVudGlhbElk\"", json);
 		Assert.Contains("\"rpId\":\"example.com\"", json);
 		Assert.Contains("\"username\":\"passkey-user\"", json);
-		Assert.Contains("\"userHandle\":\"user-handle\"", json);
+		Assert.Contains("\"userHandle\":\"dXNlci1oYW5kbGU\"", json);
 		Assert.Contains("\"key\":\"MAMCAQE\"", json);
 		Assert.Contains("\"collections\":[]", json);
 		Assert.DoesNotContain("-----BEGIN PRIVATE KEY-----", json);
@@ -81,11 +81,11 @@ public class CxfExportWriterTests
 		var entry = new PwEntry(true, true);
 		entry.Strings.Set(PwDefs.TitleField, new ProtectedString(false, "Example passkey"));
 		entry.Strings.Set(PwDefs.UserNameField, new ProtectedString(false, "account-user"));
-		entry.Strings.Set(FieldCredentialId, new ProtectedString(true, "credential-id"));
+		entry.Strings.Set(FieldCredentialId, new ProtectedString(true, "Y3JlZGVudGlhbElk"));
 		entry.Strings.Set(FieldPrivateKey, new ProtectedString(true,
 			"-----BEGIN PRIVATE KEY-----\r\n" + encodedKey + "\r\n-----END PRIVATE KEY-----\r\n"));
 		entry.Strings.Set(FieldRelyingParty, new ProtectedString(false, "example.com"));
-		entry.Strings.Set(FieldUserHandle, new ProtectedString(true, "user-handle"));
+		entry.Strings.Set(FieldUserHandle, new ProtectedString(true, "dXNlci1oYW5kbGU"));
 		entry.Strings.Set(FieldUsername, new ProtectedString(false, "passkey-user"));
 		return entry;
 	}
