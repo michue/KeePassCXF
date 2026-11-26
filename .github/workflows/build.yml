@@ -1,19 +1,24 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 Uwe Koegel
+# SPDX-FileCopyrightText: Copyright (C) 2026 Michael Hüpkes
 # SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Modifications from original
+# - 2026-11-26: adjusted paths for this project
+# - 2026-11-26: removed build steps not applicable to this project
 
 name: CI · Build & Test
 
 on:
   push:
+    branches:
+      - main
+    tags:
+      - v*
   pull_request:
   workflow_dispatch:
     inputs:
       build_release:
-        description: 'Also build Release (unsigned)'
-        type: boolean
-        default: true
-      build_store:
-        description: 'Also build Store MSIX (unsigned, for Partner Center)'
+        description: 'Also build Release'
         type: boolean
         default: true
 
@@ -36,10 +41,8 @@ jobs:
         shell: pwsh
         run: |
           $projects = @(
-            'src/KeePassPasskeyShared/KeePassPasskeyShared.csproj',
-            'src/KeePassPasskeyPlugin/KeePassPasskeyPlugin.csproj',
-            'src/KeePassPasskeyPlugin.Tests/KeePassPasskeyPlugin.Tests.csproj',
-            'src/KeePassPasskeyProvider/KeePassPasskeyProvider.csproj'
+            'src/KeePassCXFPlugin/KeePassCXFPlugin.csproj',
+            'src/KeePassCXFPlugin.Tests/KeePassCXFPlugin.Tests.csproj'
           )
           foreach ($cfg in @('Debug', 'Release')) {
             foreach ($p in $projects) {
@@ -50,21 +53,16 @@ jobs:
 
       - name: Run unit tests
         shell: pwsh
-        run: dotnet test --project src/KeePassPasskeyPlugin.Tests/KeePassPasskeyPlugin.Tests.csproj -c Debug
+        run: dotnet test --project src/KeePassCXFPlugin.Tests/KeePassCXFPlugin.Tests.csproj -c Debug
 
-      - name: Build (Debug, optimized, unsigned)
+      - name: Build (Debug, optimized)
         shell: pwsh
-        run: .\scripts\Publish-Package.ps1 -Configuration Debug -SkipSign
+        run: .\scripts\Publish-Package.ps1 -Configuration Debug
 
-      - name: Build (Release, unsigned)
+      - name: Build (Release)
         if: inputs.build_release
         shell: pwsh
-        run: .\scripts\Publish-Package.ps1 -Configuration Release -SkipSign
-
-      - name: Build (Store MSIX, unsigned)
-        if: inputs.build_store
-        shell: pwsh
-        run: .\scripts\Publish-Package.ps1 -Store
+        run: .\scripts\Publish-Package.ps1 -Configuration Release
 
       - name: Upload Defender scan report
         if: always()
@@ -77,21 +75,14 @@ jobs:
       - name: Upload artifact (Debug, optimized)
         uses: actions/upload-artifact@v7
         with:
-          name: KeePassPasskey-debug-unsigned
-          path: build\KeePassPasskey-*-debug-unsigned.zip
+          name: KeePassCXF-debug
+          path: build\KeePassCXF-*-debug.zip
 
       - name: Upload artifact (Release)
         if: inputs.build_release
         uses: actions/upload-artifact@v7
         with:
-          name: KeePassPasskey-release-unsigned
+          name: KeePassCXF-release
           path: |
-            build\KeePassPasskey-*.zip
-            !build\KeePassPasskey-*-debug-*.zip
-
-      - name: Upload artifact (Store MSIX)
-        if: inputs.build_store
-        uses: actions/upload-artifact@v7
-        with:
-          name: KeePassPasskey-store-msix
-          path: build\KeePassPasskeyProvider.Package_*_x64_Store.msix
+            build\KeePassCXF-*.zip
+            !build\KeePassCXF-*-debug.zip

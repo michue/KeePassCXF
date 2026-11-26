@@ -1,8 +1,4 @@
 <Solution>
-	<Configurations>
-		<Platform Name="Any CPU" />
-		<Platform Name="x64" />
-	</Configurations>
 	<Project Path="src/KeePassCXFPlugin/KeePassCXFPlugin.csproj" />
 	<Project Path="src/KeePassCXFPlugin.Tests/KeePassCXFPlugin.Tests.csproj" />
 </Solution>

@@ -2,7 +2,7 @@ version: 2
 updates:
   - package-ecosystem: nuget
     directory: "/src"
-    target-branch: develop
+    target-branch: dev
     schedule:
       interval: monthly
       timezone: Europe/Berlin
@@ -14,11 +14,6 @@ updates:
       # Compile-time reference pinned to the oldest supported KeePass
       - dependency-name: KeePass
     groups:
-      # Avalonia and FluentAvaloniaUI have to move together
-      avalonia:
-        patterns:
-          - "Avalonia*"
-          - "FluentAvaloniaUI"
       test:
         patterns:
           - "xunit*"
@@ -30,10 +25,8 @@ updates:
           - patch
 
   - package-ecosystem: github-actions
-    directories:
-      - "/"
-      - "/.github/actions/*"
-    target-branch: develop
+    directory: "/"
+    target-branch: dev
     schedule:
       interval: monthly
       timezone: Europe/Berlin
@@ -48,7 +41,7 @@ updates:
 
   - package-ecosystem: dotnet-sdk
     directory: "/"
-    target-branch: develop
+    target-branch: dev
     schedule:
       interval: monthly
       timezone: Europe/Berlin

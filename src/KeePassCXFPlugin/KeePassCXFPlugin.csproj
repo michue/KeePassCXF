@@ -39,11 +39,16 @@
 	</Target>
 
 	<Target Name="CopyToKeePassPlugins" AfterTargets="Build">
-		<MakeDir Directories="$(MSBuildThisFileDirectory)..\..\build\KeePass\plugins" />
+		<PropertyGroup>
+			<KeePassDevDirectory>$(MSBuildThisFileDirectory)..\..\build\KeePass</KeePassDevDirectory>
+		</PropertyGroup>
+		<MakeDir Directories="$(KeePassDevDirectory)\plugins" />
 		<ItemGroup>
 			<PluginOutputFiles Include="$(OutputPath)*.dll" />
 		</ItemGroup>
-		<Copy SourceFiles="@(PluginOutputFiles)" DestinationFolder="$(MSBuildThisFileDirectory)..\..\build\KeePass\plugins" />
+		<Copy SourceFiles="@(PluginOutputFiles)"
+			DestinationFolder="$(KeePassDevDirectory)\plugins"
+			SkipUnchangedFiles="true" />
 	</Target>
 
 </Project>

@@ -1,7 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 Uwe Koegel
+# SPDX-FileCopyrightText: Copyright (C) 2026 Michael Hüpkes
 # SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Modifications from original
+# - 2026-11-26: removed file types not used within this project
 
-# Code style for KeePassPasskey.
+# Code style for KeePassCXF.
 # Enforced at build time via EnforceCodeStyleInBuild in src/Directory.Build.props.
 
 root = true
@@ -13,7 +17,7 @@ tab_width = 4
 trim_trailing_whitespace = true
 insert_final_newline = true
 
-[*.{csproj,wapproj,props,targets,xml,axaml,manifest,appxmanifest,resx,svg}]
+[*.{csproj,props,targets,xml,manifest,resx,svg}]
 indent_size = 2
 tab_width = 2
 
@@ -168,15 +172,6 @@ dotnet_code_quality_unused_parameters = non_public:suggestion
 dotnet_remove_unnecessary_suppression_exclusions = none
 
 #### Naming ####
-#
-# Only the conventions this codebase actually agrees on are enforced. Deliberately
-# left unchecked, because a rule here would fight the code rather than describe it:
-#
-#   Parameters and locals: the P/Invoke declarations mirror the Win32 signatures
-#   (PostThreadMessage's "Msg", GetNamedPipeClientProcessId's "Pipe").
-#   Static and const fields: the codebase mixes PascalCase (Rng, DefaultSettings)
-#   with _camelCase (_syncGate, _lock), and the native mirrors (HResults.S_OK,
-#   Win32Native.WM_QUIT) have to keep their Win32 spelling.
 #
 # Note these rules are IDE-only: naming is not enforced by the build, so CI does
 # not gate on them.

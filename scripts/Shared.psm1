@@ -1,31 +1,12 @@
 ﻿# SPDX-FileCopyrightText: Copyright (C) 2026 Uwe Koegel
+# SPDX-FileCopyrightText: Copyright (C) 2026 Michael Hüpkes
 # SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Modifications from original
+# - 2026-11-26: adjusted paths for this project
+# - 2026-11-26: removed functions that are not necessary for this project
+# - 2026-11-26: removed hard coded plugin name from functions and replaced with a parameter
 Set-StrictMode -Version Latest
-
-$script:CertSubject    = 'CN=KeePassPasskey'
-$script:DevCertSubject = 'CN=KeePassPasskey Dev'
-# Debug builds use a dev publisher + dev CLSID so they coexist with a Release install.
-# These must match the #if DEBUG values in PluginConstants.cs.
-$script:ReleaseClsid = '4bff0a65-fdd6-4f97-ac44-7741ecaa5d7e'
-$script:DevClsid     = 'f048763a-d151-4fb0-b96e-315c543b2431'
-# Store channel: distinct CLSID + Partner Center package identity. CLSID must match the
-# STORE branch in PluginConstants.cs; Name/Publisher come from Partner Center > Product Identity.
-$script:StoreClsid         = '281969eb-44a9-4577-954d-b47e72665442'
-$script:StoreIdentityName  = '51133UweKgel.KeePassPasskey'
-$script:StorePublisher     = 'CN=B667D1D3-B0C8-481A-A48D-1D8129DA4932'
-$script:SignToolPath = 'C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe'
-$script:AppCertPath  = 'C:\Program Files (x86)\Windows Kits\10\App Certification Kit\appcert.exe'
-
-# Signing cert subject for a build configuration. Debug = dev identity, Release = product identity.
-function Get-CertSubject([string]$Configuration) {
-	if ($Configuration -eq 'Debug') { return $script:DevCertSubject }
-	return $script:CertSubject
-}
-
-# Microsoft Store channel package identity (Partner Center > Product Identity). The Publisher
-# doubles as the signing-cert Subject required to sideload the Store MSIX for local testing.
-function Get-StorePublisher    { return $script:StorePublisher }
-function Get-StoreIdentityName { return $script:StoreIdentityName }
 
 function Write-Step([string]$msg) {
 	Write-Host "`n==> $msg" -ForegroundColor Cyan
@@ -46,15 +27,6 @@ function Assert-Elevation {
 	}
 }
 
-function Find-MSBuild {
-	$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-	if (-not (Test-Path $vswhere)) { throw "vswhere.exe not found - is Visual Studio installed?" }
-	$msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' |
-			   Select-Object -First 1
-	if (-not $msbuild) { throw "MSBuild.exe not found via vswhere." }
-	return $msbuild
-}
-
 # Returns hashtable: FileVersion, Version (e.g. "1.0.0-dev")
 # Mirrors the MSBuild rule in Directory.Build.props: Debug builds get 'dev' unless VersionSuffix is explicitly set.
 function Get-BuildVersions([string]$RepoRoot, [string]$Configuration = '') {
@@ -72,133 +44,15 @@ function Get-BuildVersions([string]$RepoRoot, [string]$Configuration = '') {
 	return @{ FileVersion = $fileVersion; Version = $version }
 }
 
-# Publishes the provider via dotnet publish (handles restore; loose self-contained + trim when -Optimized).
-function Invoke-PublishProvider {
-	param(
-		[string]$RepoRoot,
-		[string]$Configuration,
-		[switch]$Optimized,
-		[switch]$Store
-	)
-	$csproj = "$RepoRoot\src\KeePassPasskeyProvider\KeePassPasskeyProvider.csproj"
-	$outDir = "$RepoRoot\build\$Configuration\KeePassPasskeyProvider"
-	$pubArgs = @('publish', $csproj, '-c', $Configuration, '-r', 'win-x64', '-o', $outDir, '--nologo')
-	if ($Optimized) { $pubArgs += '/p:Optimized=true' }
-	if ($Store)     { $pubArgs += '/p:Store=true' }
-	$sw = [System.Diagnostics.Stopwatch]::StartNew()
-	& dotnet $pubArgs
-	if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE" }
-	Write-Host "  Build OK.  ($([math]::Round($sw.Elapsed.TotalSeconds, 1))s)"
-}
-
-# Builds the MSIX wapproj, patching the manifest version beforehand and restoring it after.
-function Invoke-BuildWapproj {
-	param(
-		[string]$RepoRoot,
-		[string]$Configuration,
-		[string]$MSBuild,
-		[switch]$Optimized,
-		[switch]$Store
-	)
-	# Optimized and plain builds share one output dir and the publish step never overwrites what is
-	# staged there, so a stale trimmed runtime otherwise survives into the MSIX.
-	Remove-Item "$RepoRoot\build\$Configuration\KeePassPasskeyProvider\win-x64\msixpublish" `
-		-Recurse -Force -ErrorAction SilentlyContinue
-
-	# Release defaults to Optimized in the props, so the switch alone under-reports a trimmed build.
-	if ($Optimized -or $Configuration -eq 'Release') {
-		# The restore re-records the trim/R2R packs, which a plain build in between drops from the
-		# shared nuget props (NETSDK1094); msbuild on the wapproj does not restore the provider.
-		Remove-Item "$RepoRoot\src\KeePassPasskeyProvider\obj\x64\$Configuration" `
-			-Recurse -Force -ErrorAction SilentlyContinue
-		$restoreArgs = @('restore', "$RepoRoot\src\KeePassPasskeyProvider\KeePassPasskeyProvider.csproj",
-			"/p:Configuration=$Configuration", '/p:Optimized=true', '--nologo')
-		if ($Store) { $restoreArgs += '/p:Store=true' }
-		& dotnet $restoreArgs
-		if ($LASTEXITCODE -ne 0) { throw "dotnet restore failed with exit code $LASTEXITCODE" }
-	}
-
-	$versions = Get-BuildVersions $RepoRoot
-	$manifest         = "$RepoRoot\src\KeePassPasskeyProvider.Package\Package.appxmanifest"
-	$originalContent  = [IO.File]::ReadAllText($manifest)
-	$patchedContent   = $originalContent -replace '\bVersion="(\d+\.){3}\d+"', "Version=`"$($versions.FileVersion)`""
-	# Debug builds get the dev publisher + dev CLSID so they install and register beside a Release
-	# build, plus a "Dev" display name so they are distinguishable in the Start menu / Settings.
-	if ($Configuration -eq 'Debug') {
-		$patchedContent = $patchedContent -replace 'Publisher="CN=KeePassPasskey"', "Publisher=`"$script:DevCertSubject`""
-		$patchedContent = $patchedContent -replace [regex]::Escape($script:ReleaseClsid), $script:DevClsid
-		$patchedContent = $patchedContent -replace '<DisplayName>KeePassPasskey</DisplayName>', '<DisplayName>KeePassPasskey Dev</DisplayName>'
-		$patchedContent = $patchedContent -replace 'DisplayName="KeePassPasskey"', 'DisplayName="KeePassPasskey Dev"'
-		$patchedContent = $patchedContent -replace 'DisplayName="KeePassPasskey \(tray\)"', 'DisplayName="KeePassPasskey Dev (tray)"'
-		$patchedContent = $patchedContent -replace 'Alias="KeePassPasskeyProvider.exe"', 'Alias="KeePassPasskeyProviderDev.exe"'
-	}
-	# Store builds get the Partner Center package identity + Store CLSID. PublisherDisplayName
-	# already matches, so it is left as-is.
-	elseif ($Store) {
-		$patchedContent = $patchedContent -replace 'Name="KeePassPasskeyProvider"', "Name=`"$script:StoreIdentityName`""
-		$patchedContent = $patchedContent -replace 'Publisher="CN=KeePassPasskey"', "Publisher=`"$script:StorePublisher`""
-		$patchedContent = $patchedContent -replace [regex]::Escape($script:ReleaseClsid), $script:StoreClsid
-	}
-	[IO.File]::WriteAllText($manifest, $patchedContent)
-
-	# Store builds swap the badged tile/logo assets in over the GitHub-channel ones for the
-	# duration of the build (restored in finally, mirroring the manifest patch above). The badged
-	# PNGs live in Assets.Store, alongside the plain ones.
-	$assetsDir      = "$RepoRoot\src\KeePassPasskeyProvider.Package\Assets"
-	$storeAssetsDir = "$RepoRoot\src\KeePassPasskeyProvider.Package\Assets.Store"
-	$assetBackup    = $null
-	if ($Store) {
-		if (-not (Test-Path $storeAssetsDir)) { throw "Store assets not found: $storeAssetsDir" }
-		$assetBackup = Join-Path ([IO.Path]::GetTempPath()) ("kpp-assets-" + [Guid]::NewGuid().ToString('N'))
-		New-Item $assetBackup -ItemType Directory | Out-Null
-		foreach ($png in Get-ChildItem $storeAssetsDir -Filter *.png) {
-			$target = Join-Path $assetsDir $png.Name
-			if (Test-Path $target) { Copy-Item $target (Join-Path $assetBackup $png.Name) -Force }
-			Copy-Item $png.FullName $target -Force
-		}
-	}
-
-	$wapproj = "$RepoRoot\src\KeePassPasskeyProvider.Package\KeePassPasskeyProvider.Package.wapproj"
-	# Build the arg list as an array. Only add /p:Optimized when set, so that when it is omitted the
-	# props default (Release => Optimized=true) still applies.
-	$wapArgs = @(
-		$wapproj,
-		"/p:Configuration=$Configuration",
-		'/p:Platform=x64',
-		'/p:PlatformToolset=v145',
-		"/p:SolutionDir=$RepoRoot\",
-		"/p:AppxPackageDir=$RepoRoot\build\AppPackages\",
-		'/p:AppxBundle=Never',
-		'/p:UapAppxPackageBuildMode=SideLoadOnly',
-		'/p:AppxPackageSigningEnabled=false'
-	)
-	if ($Optimized) { $wapArgs += '/p:Optimized=true' }
-	if ($Store)     { $wapArgs += '/p:Store=true' }
-	$wapArgs += @('/m', '/v:minimal')
-	$sw = [System.Diagnostics.Stopwatch]::StartNew()
-	try {
-		& $MSBuild $wapArgs
-		if ($LASTEXITCODE -ne 0) { throw "msbuild failed with exit code $LASTEXITCODE" }
-		Write-Host "  Build OK.  ($([math]::Round($sw.Elapsed.TotalSeconds, 1))s)"
-	} finally {
-		[IO.File]::WriteAllText($manifest, $originalContent)
-		if ($assetBackup) {
-			foreach ($png in Get-ChildItem $assetBackup -Filter *.png) {
-				Copy-Item $png.FullName (Join-Path $assetsDir $png.Name) -Force
-			}
-			Remove-Item $assetBackup -Recurse -Force -ErrorAction SilentlyContinue
-		}
-	}
-}
-
-# Builds the KeePassPasskey plugin DLL. -Optimized turns on IL optimization for a Debug-identity build.
+# Builds the KeePass plugin DLL. -Optimized turns on IL optimization for a Debug-identity build.
 function Invoke-BuildPlugin {
 	param(
 		[string]$RepoRoot,
+		[string]$PluginName,
 		[string]$Configuration,
 		[switch]$Optimized
 	)
-	$csproj = "$RepoRoot\src\KeePassPasskeyPlugin\KeePassPasskeyPlugin.csproj"
+	$csproj = "$RepoRoot\src\$($PluginName)Plugin\$($PluginName)Plugin.csproj"
 	$sw = [System.Diagnostics.Stopwatch]::StartNew()
 	if ($Optimized) {
 		& dotnet build $csproj -c $Configuration /p:SolutionDir="$RepoRoot\" --nologo /p:Optimized=true
@@ -207,83 +61,6 @@ function Invoke-BuildPlugin {
 	}
 	if ($LASTEXITCODE -ne 0) { throw "dotnet build failed with exit code $LASTEXITCODE" }
 	Write-Host "  Build OK.  ($([math]::Round($sw.Elapsed.TotalSeconds, 1))s)"
-}
-
-# Returns the path to the .msix file for the given configuration.
-function Find-MsixPath([string]$AppPackagesDir, [string]$Configuration) {
-	$configSuffix = if ($Configuration -eq 'Debug') { '_Debug' } else { '' }
-	$folder = Get-ChildItem $AppPackagesDir -Directory -ErrorAction SilentlyContinue |
-			  Where-Object { $_.Name -like "*KeePassPasskeyProvider*x64${configSuffix}_Test" } |
-			  Sort-Object LastWriteTime -Descending |
-			  Select-Object -First 1
-	if (-not $folder) { throw "No MSIX output folder found under $AppPackagesDir" }
-	$msix = Get-ChildItem $folder.FullName -Filter '*.msix' | Select-Object -First 1 -ExpandProperty FullName
-	if (-not $msix) { throw "No .msix file found in $($folder.FullName)" }
-	return $msix
-}
-
-# Finds (or creates) the self-signed cert in CurrentUser\My for the given subject.
-function Get-OrCreateCertificate([string]$Subject = $script:CertSubject, [switch]$SkipCreate) {
-	$cert = Get-ChildItem Cert:\CurrentUser\My |
-			Where-Object { $_.Subject -eq $Subject } |
-			Sort-Object NotBefore -Descending |
-			Select-Object -First 1
-
-	if ($cert) {
-		Write-Host "  Found existing cert  Subject=$Subject  Thumbprint=$($cert.Thumbprint)  Expires=$($cert.NotAfter)"
-		return $cert
-	}
-
-	if ($SkipCreate) { throw "No cert found in CurrentUser\My with subject '$Subject' - remove -SkipCert to create one." }
-
-	Write-Step "Creating self-signed certificate ($Subject)"
-	$cert = New-SelfSignedCertificate `
-		-Type Custom `
-		-Subject $Subject `
-		-KeyUsage DigitalSignature `
-		-FriendlyName ($Subject -replace '^CN=', '') `
-		-CertStoreLocation 'Cert:\CurrentUser\My' `
-		-NotAfter (Get-Date).AddYears(5) `
-		-TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3', '2.5.29.19={text}')
-	Write-Host "  Created  Thumbprint=$($cert.Thumbprint)"
-	return $cert
-}
-
-# Returns true if the certificate is already in LocalMachine\TrustedPeople (read-only, no elevation needed).
-function Test-CertificateTrusted([string]$Thumbprint) {
-	$store = New-Object System.Security.Cryptography.X509Certificates.X509Store('TrustedPeople', 'LocalMachine')
-	$store.Open('ReadOnly')
-	$found = $store.Certificates | Where-Object { $_.Thumbprint -eq $Thumbprint }
-	$store.Close()
-	return [bool]$found
-}
-
-# Trusts the certificate in LocalMachine\TrustedPeople (requires elevation).
-function Add-TrustedCertificate([System.Security.Cryptography.X509Certificates.X509Certificate2]$Cert) {
-	$store = New-Object System.Security.Cryptography.X509Certificates.X509Store('TrustedPeople', 'LocalMachine')
-	$store.Open('ReadWrite')
-	$existing = $store.Certificates | Where-Object { $_.Thumbprint -eq $Cert.Thumbprint }
-	if ($existing) {
-		Write-Host "  Already trusted."
-	} else {
-		$store.Add($Cert)
-		Write-Host "  Cert trusted."
-	}
-	$store.Close()
-}
-
-# Signs any file with the given certificate thumbprint.
-function Invoke-SignFile([string]$FilePath, [string]$Thumbprint) {
-	if (-not (Test-Path $script:SignToolPath)) {
-		throw "signtool.exe not found at:`n  $script:SignToolPath`nInstall the Windows SDK 10.0.26100."
-	}
-	& $script:SignToolPath sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /sha1 $Thumbprint /q $FilePath | Out-Host
-	if ($LASTEXITCODE -ne 0) { throw "signtool exited with code $LASTEXITCODE" }
-	Write-Host "  Signed OK: $(Split-Path $FilePath -Leaf)"
-}
-
-function Invoke-SignMsix([string]$MsixPath, [string]$Thumbprint) {
-	Invoke-SignFile -FilePath $MsixPath -Thumbprint $Thumbprint
 }
 
 function Invoke-GenerateLicenseNotices {
@@ -384,148 +161,12 @@ function Invoke-GenerateLicenseNotices {
 	Write-Host "  Generated: $(Split-Path $OutputFile -Leaf)"
 }
 
-# Runs the Windows App Certification Kit against the Store MSIX and parses its report.
-# The Partner Center upload must stay unsigned, so WACK tests a signed throwaway copy (WACK has to
-# deploy the package, which requires a trusted signature). appcert.exe needs elevation; a
-# non-elevated caller gets a single UAC prompt and the run happens in the elevated window.
-function Invoke-Wack {
-	param(
-		[string]$RepoRoot,
-		[string]$StoreMsixPath,
-		[string]$FileVersion
-	)
-	if (-not (Test-Path $script:AppCertPath)) {
-		throw "appcert.exe not found at:`n  $script:AppCertPath`nInstall the Windows App Certification Kit (ships with the Windows SDK)."
-	}
-
-	# Signed throwaway copy for deployment; the upload MSIX stays untouched/unsigned.
-	$wackMsix = $StoreMsixPath -replace '\.msix$', '_WACK.msix'
-	Copy-Item $StoreMsixPath $wackMsix -Force
-	$cert = Get-OrCreateCertificate -Subject (Get-StorePublisher)
-	Invoke-SignMsix -MsixPath $wackMsix -Thumbprint $cert.Thumbprint
-
-	# WACK deploys the package itself; an existing install of the same identity collides.
-	$installed = Get-AppxPackage -Name (Get-StoreIdentityName) | Select-Object -First 1
-	if ($installed) {
-		Write-Host "  Removing installed Store package so WACK can deploy its own copy."
-		Write-Host "  Reinstall afterwards with: scripts\Test-StoreProvider.ps1 -SkipBuild" -ForegroundColor Yellow
-		Get-Process -Name KeePassPasskeyProvider -ErrorAction SilentlyContinue |
-			Where-Object { $_.Path -and $_.Path.StartsWith($installed.InstallLocation, [StringComparison]::OrdinalIgnoreCase) } |
-			Stop-Process -Force -ErrorAction SilentlyContinue
-		Remove-AppxPackage -Package $installed.PackageFullName
-	}
-
-	$reportPath = "$RepoRoot\build\WACK-report_$FileVersion.xml"
-	if (Test-Path $reportPath) { Remove-Item $reportPath -Force }   # appcert refuses an existing report file
-
-	# Helper script for the elevated run: trust the cert if needed, then reset + test.
-	$lines = @()
-	if (-not (Test-CertificateTrusted -Thumbprint $cert.Thumbprint)) {
-		$cerPath = "$env:TEMP\KeePassPasskeyStoreWack.cer"
-		Export-Certificate -Cert $cert -FilePath $cerPath | Out-Null
-		$lines += "Import-Certificate -FilePath '$cerPath' -CertStoreLocation Cert:\LocalMachine\TrustedPeople | Out-Null"
-	}
-	$lines += "& '$script:AppCertPath' reset"
-	$lines += "& '$script:AppCertPath' test -appxpackagepath '$wackMsix' -reportoutputpath '$reportPath'"
-	$lines += 'exit $LASTEXITCODE'
-	$helper = "$env:TEMP\KeePassPasskeyWackRun.ps1"
-	Set-Content $helper ($lines -join "`r`n") -Encoding UTF8
-
-	$isElevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-	try {
-		if ($isElevated) {
-			& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $helper | Out-Host
-			if ($LASTEXITCODE -ne 0) { Write-Host "  appcert exit code: $LASTEXITCODE" -ForegroundColor Yellow }
-		} else {
-			Write-Host "  appcert.exe needs elevation - confirm the UAC prompt. WACK takes several minutes..."
-			$p = Start-Process powershell.exe -Verb RunAs -Wait -PassThru `
-				 -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $helper
-			if ($p.ExitCode -ne 0) { Write-Host "  appcert exit code: $($p.ExitCode)" -ForegroundColor Yellow }
-		}
-	} finally {
-		Remove-Item $wackMsix -Force -ErrorAction SilentlyContinue
-	}
-
-	if (-not (Test-Path $reportPath)) {
-		throw "WACK produced no report ($reportPath). Check the appcert output for errors."
-	}
-
-	[xml]$xml = Get-Content $reportPath
-	$overall = $xml.DocumentElement.GetAttribute('OVERALL_RESULT')
-	$tests  = @($xml.SelectNodes('//TEST'))
-	$failed = @($tests | Where-Object { $r = $_.SelectSingleNode('RESULT'); $r -and $r.InnerText.Trim() -eq 'FAIL' })
-	$warned = @($tests | Where-Object { $r = $_.SelectSingleNode('RESULT'); $r -and $r.InnerText.Trim() -eq 'WARNING' })
-	foreach ($t in $failed) { Write-Host "  FAILED:  $($t.GetAttribute('NAME'))" -ForegroundColor Red }
-	foreach ($t in $warned) { Write-Host "  WARNING: $($t.GetAttribute('NAME'))" -ForegroundColor Yellow }
-	return [pscustomobject]@{
-		OverallResult = $overall
-		ReportPath    = $reportPath
-		FailedCount   = $failed.Count
-		WarningCount  = $warned.Count
-	}
-}
-
 # Reads ProductVersion (includes git hash) from the plugin DLL via PE resource - no assembly loading.
-function Get-PluginVersion([string]$BuildDir) {
-	$dllPath = Join-Path $BuildDir 'KeePassPasskey.dll'
+function Get-PluginVersion([string]$BuildDir, [string]$PluginName) {
+	$dllPath = Join-Path $BuildDir "$($PluginName).dll"
 	if (-not (Test-Path $dllPath)) { throw "Plugin DLL not found: $dllPath" }
 	return [System.Diagnostics.FileVersionInfo]::GetVersionInfo($dllPath).ProductVersion
 }
 
-function Invoke-ILRepack {
-	param(
-		[string]$BuildDir,
-		[string]$Configuration
-	)
-
-	$toolList = & dotnet tool list --global 2>&1
-	if (-not ($toolList | Select-String 'dotnet-ilrepack')) {
-		Write-Host "  Installing dotnet-ilrepack..."
-		& dotnet tool install --global dotnet-ilrepack --verbosity quiet
-		if ($LASTEXITCODE -ne 0) { throw "Failed to install dotnet-ilrepack" }
-	}
-
-	$primaryDll = Join-Path $BuildDir 'KeePassPasskey.dll'
-	if (-not (Test-Path $primaryDll)) { throw "Primary DLL not found: $primaryDll" }
-
-	# Sort: third-party packages first, then KeePassPasskey* - ensures Newtonsoft.Json
-	# is already loaded by the time ILRepack processes KeePassPasskeyShared.dll.
-	$secondaryDlls = @(Get-ChildItem $BuildDir -Filter '*.dll' |
-					   Where-Object { $_.Name -ne 'KeePassPasskey.dll' } |
-					   Sort-Object { if ($_.Name -like 'KeePassPasskey*') { 1 } else { 0 } }, Name |
-					   Select-Object -ExpandProperty FullName)
-
-	if ($secondaryDlls.Count -eq 0) {
-		Write-Host "  No secondary DLLs found; skipping merge."
-		return
-	}
-
-	$mergedDll  = Join-Path $BuildDir 'KeePassPasskey_merged.dll'
-	# /internalize makes the bundled deps internal so they don't leak into KeePass's shared process.
-	$repackArgs = @("/internalize", "/out:$mergedDll") + $primaryDll + $secondaryDlls
-
-	& ilrepack @repackArgs
-	if ($LASTEXITCODE -ne 0) { throw "ILRepack failed with exit code $LASTEXITCODE" }
-
-	Move-Item $mergedDll $primaryDll -Force
-
-	$mergedPdb = [IO.Path]::ChangeExtension($mergedDll, '.pdb')
-	if (Test-Path $mergedPdb) {
-		Move-Item $mergedPdb ([IO.Path]::ChangeExtension($primaryDll, '.pdb')) -Force
-	}
-
-	foreach ($dll in $secondaryDlls) {
-		Remove-Item $dll -Force
-		$pdb = [IO.Path]::ChangeExtension($dll, '.pdb')
-		if (Test-Path $pdb) { Remove-Item $pdb -Force }
-	}
-
-	Write-Host "  Merged $($secondaryDlls.Count + 1) assemblies into KeePassPasskey.dll"
-}
-
-Export-ModuleMember -Function Write-Step, Assert-Elevation, Find-MSBuild, Get-BuildVersions, Get-CertSubject,
-							   Get-StorePublisher, Get-StoreIdentityName,
-							   Invoke-PublishProvider, Invoke-BuildWapproj, Invoke-BuildPlugin, Find-MsixPath,
-							   Get-OrCreateCertificate, Test-CertificateTrusted, Add-TrustedCertificate,
-							   Invoke-SignFile, Invoke-SignMsix, Invoke-Wack,
-							   Invoke-GenerateLicenseNotices, Get-PluginVersion, Invoke-ILRepack
+Export-ModuleMember -Function Write-Step, Assert-Elevation, Get-BuildVersions, Invoke-BuildPlugin,
+								Invoke-GenerateLicenseNotices, Get-PluginVersion

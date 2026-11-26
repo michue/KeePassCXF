@@ -14,10 +14,9 @@
 
 <!-- Describe how you tested the changes. -->
 
-- [ ] Tested on Windows 11
-- [ ] Registered a new passkey
-- [ ] Authenticated with an existing passkey
-- [ ] KeePass plugin loads without errors
+- [ ] Build succeeds
+- [ ] Tests pass
+- [ ] Verified import/export in KeePass, if applicable
 
 ## Related Issues
 
