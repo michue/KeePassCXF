@@ -114,6 +114,51 @@ public class CxfExportWriterTests
 	}
 
 	[Fact]
+	public void Export_SkipsEntriesAndCollectionsUnderRecycleBinAndEntryTemplatesGroups()
+	{
+		var database = NewDatabase();
+		var recycleBin = new PwGroup(true, true) { Name = "Recycle Bin" };
+		var recycleBinChild = new PwGroup(true, true) { Name = "Recycle Bin child" };
+		var templates = new PwGroup(true, true) { Name = "Entry templates" };
+		var templatesChild = new PwGroup(true, true) { Name = "Templates child" };
+		var includedGroup = new PwGroup(true, true) { Name = "Included" };
+		var recycleBinEntry = NewPasskeyEntry(new byte[] { 0x30, 0x03, 0x02, 0x01, 0x01 });
+		var recycleBinChildEntry = NewPasskeyEntry(new byte[] { 0x30, 0x03, 0x02, 0x01, 0x01 });
+		var templatesEntry = NewPasskeyEntry(new byte[] { 0x30, 0x03, 0x02, 0x01, 0x01 });
+		var templatesChildEntry = NewPasskeyEntry(new byte[] { 0x30, 0x03, 0x02, 0x01, 0x01 });
+		var includedEntry = NewPasskeyEntry(new byte[] { 0x30, 0x03, 0x02, 0x01, 0x01 });
+		database.RootGroup.AddGroup(recycleBin, true);
+		database.RootGroup.AddGroup(templates, true);
+		database.RootGroup.AddGroup(includedGroup, true);
+		recycleBin.AddEntry(recycleBinEntry, true);
+		recycleBin.AddGroup(recycleBinChild, true);
+		recycleBinChild.AddEntry(recycleBinChildEntry, true);
+		templates.AddEntry(templatesEntry, true);
+		templates.AddGroup(templatesChild, true);
+		templatesChild.AddEntry(templatesChildEntry, true);
+		includedGroup.AddEntry(includedEntry, true);
+		database.RecycleBinUuid = recycleBin.Uuid;
+		database.EntryTemplatesGroup = templates.Uuid;
+		using var output = new MemoryStream();
+
+		bool exported = CxfExportWriter.Export(new PwExportInfo(database.RootGroup, database), output, new TestStatusLogger());
+
+		Assert.True(exported);
+		string json = Encoding.UTF8.GetString(output.ToArray());
+		string compactJson = Regex.Replace(json, @"\s+", string.Empty);
+		Assert.Contains("\"id\":\"" + EncodeBase64Url(includedEntry.Uuid.UuidBytes) + "\"", compactJson);
+		Assert.DoesNotContain("\"id\":\"" + EncodeBase64Url(recycleBinEntry.Uuid.UuidBytes) + "\"", compactJson);
+		Assert.DoesNotContain("\"id\":\"" + EncodeBase64Url(recycleBinChildEntry.Uuid.UuidBytes) + "\"", compactJson);
+		Assert.DoesNotContain("\"id\":\"" + EncodeBase64Url(templatesEntry.Uuid.UuidBytes) + "\"", compactJson);
+		Assert.DoesNotContain("\"id\":\"" + EncodeBase64Url(templatesChildEntry.Uuid.UuidBytes) + "\"", compactJson);
+		Assert.Contains("\"title\":\"Included\"", compactJson);
+		Assert.DoesNotContain("\"title\":\"Recycle Bin\"", compactJson);
+		Assert.DoesNotContain("\"title\":\"Recycle Bin child\"", compactJson);
+		Assert.DoesNotContain("\"title\":\"Entry templates\"", compactJson);
+		Assert.DoesNotContain("\"title\":\"Templates child\"", compactJson);
+	}
+
+	[Fact]
 	public void Export_BasicAuthOnlyEntryDoesNotRequirePasskeyData()
 	{
 		var database = NewDatabase();

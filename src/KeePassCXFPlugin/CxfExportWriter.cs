@@ -37,12 +37,12 @@ internal static class CxfExportWriter
 
 		statusLogger.SetText("Collecting items for CXF export...", LogStatusType.Info);
 		var items = new List<CxfItem>();
-		if (!CollectGroupItems(exportInfo.DataGroup, items, statusLogger, out var error))
+		if (!CollectGroupItems(exportInfo.DataGroup, database, items, statusLogger, out var error))
 		{
 			if (error != null) statusLogger.SetText(error, LogStatusType.Error);
 			return false;
 		}
-		if (!TryCreateCollections(exportInfo.DataGroup, statusLogger, out var collections, out error))
+		if (!TryCreateCollections(exportInfo.DataGroup, database, statusLogger, out var collections, out error))
 		{
 			if (error != null) statusLogger.SetText(error, LogStatusType.Error);
 			return false;
@@ -93,9 +93,11 @@ internal static class CxfExportWriter
 		return true;
 	}
 
-	private static bool CollectGroupItems(PwGroup group, List<CxfItem> items, IStatusLogger statusLogger, out string error)
+	private static bool CollectGroupItems(PwGroup group, PwDatabase database, List<CxfItem> items,
+		IStatusLogger statusLogger, out string error)
 	{
 		error = null;
+		if (IsExcludedGroup(group, database)) return true;
 		for (uint i = 0; i < group.Entries.UCount; i++)
 		{
 			if (!statusLogger.ContinueWork()) return false;
@@ -105,19 +107,24 @@ internal static class CxfExportWriter
 			items.Add(item);
 		}
 		for (uint i = 0; i < group.Groups.UCount; i++)
-			if (!CollectGroupItems(group.Groups.GetAt(i), items, statusLogger, out error)) return false;
+			if (!CollectGroupItems(group.Groups.GetAt(i), database, items, statusLogger, out error)) return false;
 		return true;
 	}
 
-	private static bool TryCreateCollections(PwGroup parentGroup, IStatusLogger statusLogger,
+	private static bool TryCreateCollections(PwGroup parentGroup, PwDatabase database, IStatusLogger statusLogger,
 		out CxfCollection[] collections, out string error)
 	{
-		collections = new CxfCollection[parentGroup.Groups.UCount];
 		error = null;
+		var result = new List<CxfCollection>();
 		for (uint i = 0; i < parentGroup.Groups.UCount; i++)
 		{
-			if (!statusLogger.ContinueWork()) return false;
 			var group = parentGroup.Groups.GetAt(i);
+			if (IsExcludedGroup(group, database)) continue;
+			if (!statusLogger.ContinueWork())
+			{
+				collections = Array.Empty<CxfCollection>();
+				return false;
+			}
 			var linkedItems = new List<CxfLinkedItem>();
 			for (uint entryIndex = 0; entryIndex < group.Entries.UCount; entryIndex++)
 			{
@@ -125,8 +132,12 @@ internal static class CxfExportWriter
 				if (HasExportableCredentials(entry)) linkedItems.Add(new CxfLinkedItem { Item = ToBase64Url(entry.Uuid.UuidBytes) });
 			}
 
-			if (!TryCreateCollections(group, statusLogger, out var subCollections, out error)) return false;
-			collections[i] = new CxfCollection
+			if (!TryCreateCollections(group, database, statusLogger, out var subCollections, out error))
+			{
+				collections = Array.Empty<CxfCollection>();
+				return false;
+			}
+			result.Add(new CxfCollection
 			{
 				Id = ToBase64Url(group.Uuid.UuidBytes),
 				CreationAt = ToOptionalUnixTimeSeconds(group.CreationTime),
@@ -135,9 +146,20 @@ internal static class CxfExportWriter
 				Subtitle = string.IsNullOrWhiteSpace(group.Notes) ? null : group.Notes,
 				Items = linkedItems.ToArray(),
 				SubCollections = subCollections.Length == 0 ? null : subCollections,
-			};
+			});
 		}
+		collections = result.ToArray();
 		return true;
+	}
+
+	private static bool IsExcludedGroup(PwGroup group, PwDatabase database)
+	{
+		var recycleBinUuid = database.RecycleBinUuid;
+		var entryTemplatesGroupUuid = database.EntryTemplatesGroup;
+		if ((!recycleBinUuid.IsZero && group.Uuid.Equals(recycleBinUuid))
+			|| (!entryTemplatesGroupUuid.IsZero && group.Uuid.Equals(entryTemplatesGroupUuid)))
+			return true;
+		return false;
 	}
 
 	private static bool HasPasskey(PwEntry entry) =>
