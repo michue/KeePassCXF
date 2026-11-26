@@ -6,9 +6,11 @@ namespace KeePassCXF;
 
 public sealed class KeePassCXFExt : Plugin
 {
-	public override bool Initialize(IPluginHost host) => host != null;
-
-	public override void Terminate()
+	public override bool Initialize(IPluginHost host)
 	{
+		if (host == null) return false;
+
+		host.FileFormatPool.Add(new CxfFileFormatProvider());
+		return true;
 	}
 }

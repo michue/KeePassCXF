@@ -19,6 +19,10 @@
 		<ProjectReference Include="..\KeePassCXFPlugin\KeePassCXFPlugin.csproj" />
 	</ItemGroup>
 
+	<ItemGroup>
+		<None Update="TestData\Import\**\*.json" CopyToOutputDirectory="PreserveNewest" />
+	</ItemGroup>
+
 	<!-- The same KeePass the plugin compiles against, copied next to the tests since KeePassLib types run here. -->
 	<ItemGroup Condition="Exists('..\..\build\KeePass.exe')">
 		<Reference Include="KeePass">
