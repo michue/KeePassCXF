@@ -42,8 +42,6 @@ public class CxfImportReaderTests
 			Assert.True(entry.Strings.GetSafe("KPEX_PASSKEY_CREDENTIAL_ID").IsProtected);
 			Assert.True(entry.Strings.GetSafe("KPEX_PASSKEY_PRIVATE_KEY_PEM").IsProtected);
 			Assert.Contains("-----BEGIN PRIVATE KEY-----", entry.Strings.ReadSafe("KPEX_PASSKEY_PRIVATE_KEY_PEM"));
-			Assert.Equal("1", entry.Strings.ReadSafe("KPEX_PASSKEY_FLAG_BE"));
-			Assert.Equal("1", entry.Strings.ReadSafe("KPEX_PASSKEY_FLAG_BS"));
 			Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1705142400).UtcDateTime, entry.CreationTime);
 			Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1705228800).UtcDateTime, entry.LastModificationTime);
 		}

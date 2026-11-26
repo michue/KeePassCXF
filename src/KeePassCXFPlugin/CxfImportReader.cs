@@ -252,8 +252,6 @@ internal static class CxfImportReader
 			entry.Strings.Set(FieldRelyingParty, new ProtectedString(false, credential.RpId));
 			entry.Strings.Set(FieldUserHandle, new ProtectedString(true, credential.UserHandle));
 			entry.Strings.Set(FieldUsername, new ProtectedString(false, credential.Username));
-			entry.Strings.Set("KPEX_PASSKEY_FLAG_BE", new ProtectedString(false, "1"));
-			entry.Strings.Set("KPEX_PASSKEY_FLAG_BS", new ProtectedString(false, "1"));
 			entry.IconId = PwIcon.MultiKeys;
 
 			if (item.CreationAt.HasValue)
