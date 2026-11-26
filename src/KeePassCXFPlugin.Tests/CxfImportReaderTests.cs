@@ -45,6 +45,7 @@ public class CxfImportReaderTests
 			Assert.Equal("example.com", entry.Strings.ReadSafe("KPEX_PASSKEY_RELYING_PARTY"));
 			Assert.Equal("passkey-user", entry.Strings.ReadSafe("KPEX_PASSKEY_USERNAME"));
 			Assert.Equal("dXNlci1oYW5kbGU", entry.Strings.ReadSafe("KPEX_PASSKEY_USER_HANDLE"));
+			Assert.Empty(entry.Tags);
 			Assert.True(entry.Strings.GetSafe("KPEX_PASSKEY_CREDENTIAL_ID").IsProtected);
 			Assert.True(entry.Strings.GetSafe("KPEX_PASSKEY_PRIVATE_KEY_PEM").IsProtected);
 			Assert.Contains("-----BEGIN PRIVATE KEY-----", entry.Strings.ReadSafe("KPEX_PASSKEY_PRIVATE_KEY_PEM"));
@@ -60,13 +61,14 @@ public class CxfImportReaderTests
 		var logger = new TestStatusLogger();
 		string document = (Prefix + Passkey + Suffix).Replace(
 			"\"title\":\"Example passkey\",",
-			"\"title\":\"Example passkey\",\"subtitle\":\"Imported notes\",\"scope\":{\"urls\":[\"https://first.example/login\",\"https://second.example/login\"],\"androidApps\":[]},");
+			"\"title\":\"Example passkey\",\"subtitle\":\"Imported notes\",\"scope\":{\"urls\":[\"https://first.example/login\",\"https://second.example/login\"],\"androidApps\":[]},\"tags\":[\"work\",\"security\"],");
 		using (var input = JsonStream(document))
 			new CxfFileFormatProvider().Import(database, input, logger);
 
 		var entry = database.RootGroup.GetEntries(true).GetAt(0);
 		Assert.Equal("Imported notes", entry.Strings.ReadSafe(PwDefs.NotesField));
 		Assert.Equal("https://first.example/login", entry.Strings.ReadSafe(PwDefs.UrlField));
+		Assert.Equal(new[] { "security", "work" }, entry.Tags);
 		Assert.Single(logger.Warnings);
 		Assert.Contains("multiple scope URLs", logger.Warnings[0]);
 		Assert.Contains("first URL", logger.Warnings[0]);

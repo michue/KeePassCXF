@@ -184,6 +184,7 @@ internal static class CxfImportReader
 					Subtitle = GetString(item, "subtitle"),
 					Scope = ParseCredentialScope(GetValue(item, "scope")),
 					Credentials = credentials.ToArray(),
+					Tags = GetStringArray(item, "tags", "item tags"),
 				});
 			}
 
@@ -376,6 +377,8 @@ internal static class CxfImportReader
 			entry.Strings.Set(PwDefs.NotesField, new ProtectedString(false, item.Subtitle ?? string.Empty));
 			entry.Strings.Set(PwDefs.UrlField, new ProtectedString(false,
 				item.Scope?.Urls != null && item.Scope.Urls.Length > 0 ? item.Scope.Urls[0] : string.Empty));
+			foreach (string tag in item.Tags)
+				entry.AddTag(tag);
 			entry.Strings.Set(PwDefs.UserNameField, new ProtectedString(false, accountUsername));
 			entry.Strings.Set(PwDefs.PasswordField, ProtectedString.EmptyEx);
 			entry.Strings.Set(FieldCredentialId, new ProtectedString(true, credential.CredentialId));

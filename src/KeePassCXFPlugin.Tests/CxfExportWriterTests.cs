@@ -32,6 +32,8 @@ public class CxfExportWriterTests
 		var entry = NewPasskeyEntry(der);
 		entry.Strings.Set(PwDefs.NotesField, new ProtectedString(false, "Passkey notes"));
 		entry.Strings.Set(PwDefs.UrlField, new ProtectedString(false, "https://example.com/login"));
+		entry.AddTag("work");
+		entry.AddTag("security");
 		var secondEntry = NewPasskeyEntry(der);
 		secondEntry.Strings.Set(PwDefs.TitleField, new ProtectedString(false, "Second passkey"));
 		database.RootGroup.AddEntry(entry, true);
@@ -52,8 +54,10 @@ public class CxfExportWriterTests
 		Assert.Contains("\"id\":\"" + EncodeBase64Url(entry.Uuid.UuidBytes) + "\"", compactJson);
 		Assert.Contains("\"subtitle\": \"Passkey notes\"", json);
 		Assert.Contains("\"scope\":{\"urls\":[\"https:\\/\\/example.com\\/login\"],\"androidApps\":[]}", compactJson);
+		Assert.Contains("\"tags\":[\"security\",\"work\"]", compactJson);
 		Assert.Single(Regex.Matches(compactJson, "\\\"subtitle\\\":").Cast<Match>());
 		Assert.Single(Regex.Matches(compactJson, "\\\"scope\\\":").Cast<Match>());
+		Assert.Single(Regex.Matches(compactJson, "\\\"tags\\\":").Cast<Match>());
 		Assert.Contains("\"id\":\"" + EncodeBase64Url(secondEntry.Uuid.UuidBytes) + "\"", compactJson);
 		Assert.Equal(1, Regex.Matches(compactJson, "\\\"accounts\\\":\\[\\{").Count);
 		Assert.Equal(2, Regex.Matches(compactJson, "\\\"type\\\":\\\"passkey\\\"").Count);

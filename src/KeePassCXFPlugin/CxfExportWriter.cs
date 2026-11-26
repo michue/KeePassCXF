@@ -187,6 +187,7 @@ internal static class CxfExportWriter
 					: entry.Strings.ReadSafe(PwDefs.NotesField),
 				Scope = string.IsNullOrEmpty(url) ? null : new CxfCredentialScope { Urls = new[] { url }, AndroidApps = Array.Empty<string>() },
 				Credentials = new[] { passkey },
+				Tags = entry.Tags.Count == 0 ? null : entry.Tags.ToArray(),
 			};
 			return true;
 		}
@@ -322,8 +323,10 @@ internal static class CxfExportWriter
 		[DataMember(Name = "modifiedAt", Order = 2, EmitDefaultValue = false)] public long? ModifiedAt { get; set; }
 		[DataMember(Name = "title", Order = 3)] public string Title { get; set; }
 		[DataMember(Name = "subtitle", Order = 4, EmitDefaultValue = false)] public string Subtitle { get; set; }
-		[DataMember(Name = "scope", Order = 5, EmitDefaultValue = false)] public CxfCredentialScope Scope { get; set; }
-		[DataMember(Name = "credentials", Order = 6)] public CxfPasskey[] Credentials { get; set; }
+		[DataMember(Name = "favorite", Order = 5, EmitDefaultValue = false)] public bool Favorite { get; set; }
+		[DataMember(Name = "scope", Order = 6, EmitDefaultValue = false)] public CxfCredentialScope Scope { get; set; }
+		[DataMember(Name = "credentials", Order = 7)] public CxfPasskey[] Credentials { get; set; }
+		[DataMember(Name = "tags", Order = 8, EmitDefaultValue = false)] public string[] Tags { get; set; }
 	}
 
 	[DataContract]
