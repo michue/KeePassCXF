@@ -66,7 +66,7 @@ public class CxfExportWriterTests
 		Assert.Single(Regex.Matches(compactJson, "\\\"scope\\\":").Cast<Match>());
 		Assert.Single(Regex.Matches(compactJson, "\\\"tags\\\":").Cast<Match>());
 		Assert.Contains("\"id\":\"" + EncodeBase64Url(secondEntry.Uuid.UuidBytes) + "\"", compactJson);
-		Assert.Equal(1, Regex.Matches(compactJson, "\\\"accounts\\\":\\[\\{").Count);
+		Assert.Single(Regex.Matches(compactJson, "\\\"accounts\\\":\\[\\{"));
 		Assert.Equal(2, Regex.Matches(compactJson, "\\\"type\\\":\\\"passkey\\\"").Count);
 		Assert.Contains("\"type\":\"passkey\"", compactJson);
 		Assert.Contains("\"credentialId\":\"Y3JlZGVudGlhbElk\"", compactJson);
