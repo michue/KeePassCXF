@@ -1,0 +1,33 @@
+<!-- SPDX-FileCopyrightText: Copyright (C) 2026 Michael Hüpkes -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net48</TargetFramework>
+		<OutputType>Exe</OutputType>
+		<LangVersion>latest</LangVersion>
+		<Nullable>enable</Nullable>
+		<IsPackable>false</IsPackable>
+		<IsTestProject>true</IsTestProject>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="xunit.v3" Version="4.0.2" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\KeePassCXFPlugin\KeePassCXFPlugin.csproj" />
+	</ItemGroup>
+
+	<!-- The same KeePass the plugin compiles against, copied next to the tests since KeePassLib types run here. -->
+	<ItemGroup Condition="Exists('..\..\build\KeePass.exe')">
+		<Reference Include="KeePass">
+			<HintPath>..\..\build\KeePass.exe</HintPath>
+			<Private>True</Private>
+		</Reference>
+	</ItemGroup>
+	<ItemGroup Condition="!Exists('..\..\build\KeePass.exe')">
+		<PackageReference Include="KeePass" Version="2.54.0.23169" />
+	</ItemGroup>
+
+</Project>
