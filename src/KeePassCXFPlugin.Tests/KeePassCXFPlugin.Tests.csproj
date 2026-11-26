@@ -31,7 +31,7 @@
 		</Reference>
 	</ItemGroup>
 	<ItemGroup Condition="!Exists('..\..\build\KeePass.exe')">
-		<PackageReference Include="KeePass" Version="2.54.0.23169" />
+		<PackageReference Include="KeePass" Version="2.58.0" />
 	</ItemGroup>
 
 </Project>

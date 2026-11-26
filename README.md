@@ -9,7 +9,7 @@ A KeePass plugin for importing and exporting credentials using the FIDO Alliance
 
 ## Requirements
 
-- [KeePass](https://keepass.info/) 2.54 or later
+- [KeePass](https://keepass.info/) 2.58 or later
 
 **Current limitations:**
 
@@ -18,7 +18,7 @@ A KeePass plugin for importing and exporting credentials using the FIDO Alliance
 
 ## How to use
 
-The plugin integrates with KeePass's built-in Import and Export dialogs and shows up in the group *Password Managers*. There you can simply select *Client Exchange Format (CXF)* as the file type.
+The plugin integrates with KeePass's built-in Import and Export dialogs and shows up in the group *General*. There you can simply select *Client Exchange Format (CXF)* as the file type.
 
 ## Installation
 
@@ -33,7 +33,7 @@ The plugin integrates with KeePass's built-in Import and Export dialogs and show
 |---|---|
 | Visual Studio 2026 | With .NET desktop development workload |
 | .NET Framework 4.8 SDK | For KeePassCFXPlugin |
-| KeePass.exe (2.54, compile reference) | Place at `build\KeePass.exe` - minimum supported version, used only for compilation |
+| KeePass.exe (2.58, compile reference) | Place at `build\KeePass.exe` - minimum supported version, used only for compilation |
 | KeePass.exe (current, for debugging) | Place at `build\KeePass\KeePass.exe` - your installed/current version, used to launch KeePass during development |
 
 Requires Visual Studio with .NET desktop development tools, the .NET SDK selected by `global.json`, and the .NET Framework 4.8 targeting pack.

@@ -26,7 +26,7 @@
 		</Reference>
 	</ItemGroup>
 	<ItemGroup Condition="!Exists('..\..\build\KeePass.exe')">
-		<PackageReference Include="KeePass" Version="2.54.0.23169">
+		<PackageReference Include="KeePass" Version="2.58.0">
 			<IncludeAssets>compile</IncludeAssets>
 			<ExcludeAssets>runtime;build;native;contentfiles;analyzers;buildtransitive</ExcludeAssets>
 		</PackageReference>
@@ -50,9 +50,7 @@
 		<ItemGroup>
 			<PluginOutputFiles Include="$(OutputPath)*.dll" />
 		</ItemGroup>
-		<Copy SourceFiles="@(PluginOutputFiles)"
-			DestinationFolder="$(KeePassDevDirectory)\plugins"
-			SkipUnchangedFiles="true" />
+		<Copy SourceFiles="@(PluginOutputFiles)" DestinationFolder="$(KeePassDevDirectory)\plugins" SkipUnchangedFiles="true" />
 	</Target>
 
 </Project>

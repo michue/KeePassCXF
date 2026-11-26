@@ -6,6 +6,7 @@ using System.IO;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Text;
+using System.Xml;
 using KeePass.DataExchange;
 using KeePassLib;
 using KeePassLib.Interfaces;
@@ -26,38 +27,57 @@ internal static class CxfExportWriter
 
 	internal static bool Export(PwExportInfo exportInfo, Stream output, IStatusLogger statusLogger)
 	{
-		statusLogger.SetText("Collecting passkeys for CXF export...", LogStatusType.Info);
-		var accounts = new List<CxfAccount>();
-		var entries = exportInfo.DataGroup.GetEntries(true);
-		for (int i = 0; i < entries.UCount; i++)
+		var database = exportInfo.ContextDatabase;
+		string databaseFileName = database == null ? null : Path.GetFileName(database.IOConnectionInfo.Path);
+		if (database == null || string.IsNullOrEmpty(databaseFileName))
 		{
-			if (!statusLogger.ContinueWork()) return false;
-
-			var entry = entries.GetAt((uint)i);
-			if (!HasPasskey(entry)) continue;
-
-			if (!TryCreateAccount(entry, out var account, out var error))
-			{
-				statusLogger.SetText(error, LogStatusType.Error);
-				return false;
-			}
-			accounts.Add(account);
+			statusLogger.SetText("The KeePass database context or file name is unavailable.", LogStatusType.Error);
+			return false;
 		}
 
+		statusLogger.SetText("Collecting items for CXF export...", LogStatusType.Info);
+		var items = new List<CxfItem>();
+		if (!CollectGroupItems(exportInfo.DataGroup, database, items, statusLogger, out var error))
+		{
+			if (error != null) statusLogger.SetText(error, LogStatusType.Error);
+			return false;
+		}
+		if (!TryCreateCollections(exportInfo.DataGroup, database, statusLogger, out var collections, out error))
+		{
+			if (error != null) statusLogger.SetText(error, LogStatusType.Error);
+			return false;
+		}
+
+		var account = new CxfAccount
+		{
+			Id = ToBase64Url(database.RootGroup.Uuid.UuidBytes),
+			Username = databaseFileName,
+			Email = string.Empty,
+			Collections = collections,
+			Items = items.ToArray(),
+		};
 		var payload = new CxfHeader
 		{
 			Version = new CxfVersion { Major = 1, Minor = 0 },
 			ExporterRpId = ExporterRpId,
 			ExporterDisplayName = ExporterDisplayName,
 			Timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-			Accounts = accounts.ToArray(),
+			Accounts = new[] { account },
 		};
 
-		statusLogger.SetText($"Writing {accounts.Count} passkey(s) in CXF format...", LogStatusType.Info);
-		var serializer = new DataContractJsonSerializer(typeof(CxfHeader));
+		statusLogger.SetText($"Writing {items.Count} item(s) in CXF format...", LogStatusType.Info);
+		var serializer = new DataContractJsonSerializer(typeof(CxfHeader), new DataContractJsonSerializerSettings
+		{
+			EmitTypeInformation = EmitTypeInformation.Never,
+			KnownTypes = new[] { typeof(CxfBasicAuth), typeof(CxfPasskey) },
+		});
 		using (var json = new MemoryStream())
 		{
-			serializer.WriteObject(json, payload);
+			using (XmlDictionaryWriter writer = JsonReaderWriterFactory.CreateJsonWriter(json, Encoding.UTF8, false, true))
+			{
+				serializer.WriteObject(writer, payload);
+				writer.Flush();
+			}
 			var buffer = json.GetBuffer();
 			try
 			{
@@ -69,64 +89,161 @@ internal static class CxfExportWriter
 			}
 		}
 
-		statusLogger.SetText($"Exported {accounts.Count} passkey(s).", LogStatusType.Info);
+		statusLogger.SetText($"Exported {items.Count} item(s).", LogStatusType.Info);
 		return true;
+	}
+
+	private static bool CollectGroupItems(PwGroup group, PwDatabase database, List<CxfItem> items,
+		IStatusLogger statusLogger, out string error)
+	{
+		error = null;
+		if (IsExcludedGroup(group, database)) return true;
+		for (uint i = 0; i < group.Entries.UCount; i++)
+		{
+			if (!statusLogger.ContinueWork()) return false;
+			var entry = group.Entries.GetAt(i);
+			if (!HasExportableCredentials(entry)) continue;
+			if (!TryCreateItem(entry, out var item, out error)) return false;
+			items.Add(item);
+		}
+		for (uint i = 0; i < group.Groups.UCount; i++)
+			if (!CollectGroupItems(group.Groups.GetAt(i), database, items, statusLogger, out error)) return false;
+		return true;
+	}
+
+	private static bool TryCreateCollections(PwGroup parentGroup, PwDatabase database, IStatusLogger statusLogger,
+		out CxfCollection[] collections, out string error)
+	{
+		error = null;
+		var result = new List<CxfCollection>();
+		for (uint i = 0; i < parentGroup.Groups.UCount; i++)
+		{
+			var group = parentGroup.Groups.GetAt(i);
+			if (IsExcludedGroup(group, database)) continue;
+			if (!statusLogger.ContinueWork())
+			{
+				collections = Array.Empty<CxfCollection>();
+				return false;
+			}
+			var linkedItems = new List<CxfLinkedItem>();
+			for (uint entryIndex = 0; entryIndex < group.Entries.UCount; entryIndex++)
+			{
+				var entry = group.Entries.GetAt(entryIndex);
+				if (HasExportableCredentials(entry)) linkedItems.Add(new CxfLinkedItem { Item = ToBase64Url(entry.Uuid.UuidBytes) });
+			}
+
+			if (!TryCreateCollections(group, database, statusLogger, out var subCollections, out error))
+			{
+				collections = Array.Empty<CxfCollection>();
+				return false;
+			}
+			result.Add(new CxfCollection
+			{
+				Id = ToBase64Url(group.Uuid.UuidBytes),
+				CreationAt = ToOptionalUnixTimeSeconds(group.CreationTime),
+				ModifiedAt = ToOptionalUnixTimeSeconds(group.LastModificationTime),
+				Title = group.Name,
+				Subtitle = string.IsNullOrWhiteSpace(group.Notes) ? null : group.Notes,
+				Items = linkedItems.ToArray(),
+				SubCollections = subCollections.Length == 0 ? null : subCollections,
+			});
+		}
+		collections = result.ToArray();
+		return true;
+	}
+
+	private static bool IsExcludedGroup(PwGroup group, PwDatabase database)
+	{
+		var recycleBinUuid = database.RecycleBinUuid;
+		var entryTemplatesGroupUuid = database.EntryTemplatesGroup;
+		if ((!recycleBinUuid.IsZero && group.Uuid.Equals(recycleBinUuid))
+			|| (!entryTemplatesGroupUuid.IsZero && group.Uuid.Equals(entryTemplatesGroupUuid)))
+			return true;
+		return false;
 	}
 
 	private static bool HasPasskey(PwEntry entry) =>
 		entry.Strings.Exists(FieldCredentialId)
 		&& !string.IsNullOrEmpty(entry.Strings.ReadSafe(FieldCredentialId));
 
-	private static bool TryCreateAccount(PwEntry entry, out CxfAccount account, out string error)
-	{
-		account = null;
-		error = null;
-		var credentialId = entry.Strings.ReadSafe(FieldCredentialId);
-		var relyingParty = entry.Strings.ReadSafe(FieldRelyingParty);
-		var privateKey = entry.Strings.GetSafe(FieldPrivateKey);
-		if (string.IsNullOrEmpty(relyingParty))
-		{
-			error = $"Passkey entry '{entry.Strings.ReadSafe(PwDefs.TitleField)}' has no relying party ID and was not exported.";
-			return false;
-		}
-		if (privateKey == null || privateKey.IsEmpty)
-		{
-			error = $"Passkey entry '{entry.Strings.ReadSafe(PwDefs.TitleField)}' has no private key and was not exported.";
-			return false;
-		}
+	private static bool HasBasicAuth(PwEntry entry) =>
+		!string.IsNullOrEmpty(entry.Strings.ReadSafe(PwDefs.UserNameField))
+		|| !string.IsNullOrEmpty(entry.Strings.ReadSafe(PwDefs.PasswordField));
 
+	private static bool HasExportableCredentials(PwEntry entry) => HasPasskey(entry) || HasBasicAuth(entry);
+
+	private static bool TryCreateItem(PwEntry entry, out CxfItem item, out string error)
+	{
+		item = null;
+		error = null;
+		var credentials = new List<CxfCredential>();
 		byte[] der = null;
 		try
 		{
-			der = DecodePkcs8PrivateKey(privateKey);
-			if (der.Length == 0)
-				throw new InvalidDataException("The PKCS#8 private key is empty.");
+			if (HasPasskey(entry))
+			{
+				var credentialId = entry.Strings.ReadSafe(FieldCredentialId);
+				var relyingParty = entry.Strings.ReadSafe(FieldRelyingParty);
+				var privateKey = entry.Strings.GetSafe(FieldPrivateKey);
+				if (string.IsNullOrEmpty(relyingParty))
+				{
+					error = $"Passkey entry '{entry.Strings.ReadSafe(PwDefs.TitleField)}' has no relying party ID and was not exported.";
+					return false;
+				}
+				if (privateKey == null || privateKey.IsEmpty)
+				{
+					error = $"Passkey entry '{entry.Strings.ReadSafe(PwDefs.TitleField)}' has no private key and was not exported.";
+					return false;
+				}
 
-			var passkey = new CxfPasskey
+				der = DecodePkcs8PrivateKey(privateKey);
+				if (der.Length == 0)
+					throw new InvalidDataException("The PKCS#8 private key is empty.");
+				credentials.Add(new CxfPasskey
+				{
+					Type = "passkey",
+					CredentialId = credentialId,
+					RpId = relyingParty,
+					Username = entry.Strings.ReadSafe(FieldUsername),
+					UserDisplayName = string.Empty,
+					UserHandle = entry.Strings.ReadSafe(FieldUserHandle),
+					Key = ToBase64Url(der),
+				});
+			}
+			if (HasBasicAuth(entry))
 			{
-				Type = "passkey",
-				CredentialId = credentialId,
-				RpId = relyingParty,
-				Username = entry.Strings.ReadSafe(FieldUsername),
-				UserDisplayName = string.Empty,
-				UserHandle = entry.Strings.ReadSafe(FieldUserHandle),
-				Key = ToBase64Url(der),
-			};
-			var item = new CxfItem
+				string username = entry.Strings.ReadSafe(PwDefs.UserNameField);
+				string password = entry.Strings.ReadSafe(PwDefs.PasswordField);
+				credentials.Insert(0, new CxfBasicAuth
+				{
+					Type = "basic-auth",
+					Username = string.IsNullOrEmpty(username) ? null : new CxfEditableField
+					{
+						FieldType = "string",
+						Value = username,
+						Label = KeePass.Resources.KPRes.UserName,
+					},
+					Password = string.IsNullOrEmpty(password) ? null : new CxfEditableField
+					{
+						FieldType = "concealed-string",
+						Value = password,
+						Label = KeePass.Resources.KPRes.Password,
+					},
+				});
+			}
+			string url = entry.Strings.ReadSafe(PwDefs.UrlField);
+			item = new CxfItem
 			{
-				Id = credentialId,
+				Id = ToBase64Url(entry.Uuid.UuidBytes),
 				CreationAt = ToUnixTimeSeconds(entry.CreationTime),
 				ModifiedAt = ToUnixTimeSeconds(entry.LastModificationTime),
 				Title = entry.Strings.ReadSafe(PwDefs.TitleField),
-				Credentials = new[] { passkey },
-			};
-			account = new CxfAccount
-			{
-				Id = ToBase64Url(entry.Uuid.UuidBytes),
-				Username = entry.Strings.ReadSafe(PwDefs.UserNameField),
-				Email = string.Empty,
-				Collections = Array.Empty<CxfCollection>(),
-				Items = new[] { item },
+				Subtitle = string.IsNullOrEmpty(entry.Strings.ReadSafe(PwDefs.NotesField))
+					? null
+					: entry.Strings.ReadSafe(PwDefs.NotesField),
+				Scope = string.IsNullOrEmpty(url) ? null : new CxfCredentialScope { Urls = new[] { url }, AndroidApps = Array.Empty<string>() },
+				Credentials = credentials.ToArray(),
+				Tags = entry.Tags.Count == 0 ? null : entry.Tags.ToArray(),
 			};
 			return true;
 		}
@@ -144,6 +261,12 @@ internal static class CxfExportWriter
 		{
 			if (der != null) MemUtil.ZeroByteArray(der);
 		}
+	}
+
+	private static long? ToOptionalUnixTimeSeconds(DateTime value)
+	{
+		long timestamp = ToUnixTimeSeconds(value);
+		return timestamp < 0 ? (long?)null : timestamp;
 	}
 
 	private static long ToUnixTimeSeconds(DateTime value)
@@ -232,6 +355,20 @@ internal static class CxfExportWriter
 	[DataContract]
 	internal sealed class CxfCollection
 	{
+		[DataMember(Name = "id", Order = 0)] public string Id { get; set; }
+		[DataMember(Name = "creationAt", Order = 1, EmitDefaultValue = false)] public long? CreationAt { get; set; }
+		[DataMember(Name = "modifiedAt", Order = 2, EmitDefaultValue = false)] public long? ModifiedAt { get; set; }
+		[DataMember(Name = "title", Order = 3)] public string Title { get; set; }
+		[DataMember(Name = "subtitle", Order = 4, EmitDefaultValue = false)] public string Subtitle { get; set; }
+		[DataMember(Name = "items", Order = 5)] public CxfLinkedItem[] Items { get; set; }
+		[DataMember(Name = "subCollections", Order = 6, EmitDefaultValue = false)] public CxfCollection[] SubCollections { get; set; }
+	}
+
+	[DataContract]
+	internal sealed class CxfLinkedItem
+	{
+		[DataMember(Name = "item", Order = 0)] public string Item { get; set; }
+		[DataMember(Name = "account", Order = 1, EmitDefaultValue = false)] public string Account { get; set; }
 	}
 
 	[DataContract]
@@ -241,18 +378,52 @@ internal static class CxfExportWriter
 		[DataMember(Name = "creationAt", Order = 1, EmitDefaultValue = false)] public long? CreationAt { get; set; }
 		[DataMember(Name = "modifiedAt", Order = 2, EmitDefaultValue = false)] public long? ModifiedAt { get; set; }
 		[DataMember(Name = "title", Order = 3)] public string Title { get; set; }
-		[DataMember(Name = "credentials", Order = 4)] public CxfPasskey[] Credentials { get; set; }
+		[DataMember(Name = "subtitle", Order = 4, EmitDefaultValue = false)] public string Subtitle { get; set; }
+		[DataMember(Name = "favorite", Order = 5, EmitDefaultValue = false)] public bool Favorite { get; set; }
+		[DataMember(Name = "scope", Order = 6, EmitDefaultValue = false)] public CxfCredentialScope Scope { get; set; }
+		[DataMember(Name = "credentials", Order = 7)] public CxfCredential[] Credentials { get; set; }
+		[DataMember(Name = "tags", Order = 8, EmitDefaultValue = false)] public string[] Tags { get; set; }
 	}
 
 	[DataContract]
-	internal sealed class CxfPasskey
+	internal sealed class CxfCredentialScope
+	{
+		[DataMember(Name = "urls", Order = 0)] public string[] Urls { get; set; }
+		[DataMember(Name = "androidApps", Order = 1)] public string[] AndroidApps { get; set; }
+	}
+
+	[DataContract]
+	[KnownType(typeof(CxfBasicAuth))]
+	[KnownType(typeof(CxfPasskey))]
+	internal abstract class CxfCredential
 	{
 		[DataMember(Name = "type", Order = 0)] public string Type { get; set; }
+	}
+
+	[DataContract]
+	internal sealed class CxfBasicAuth : CxfCredential
+	{
+		[DataMember(Name = "username", Order = 1, EmitDefaultValue = false)] public CxfEditableField Username { get; set; }
+		[DataMember(Name = "password", Order = 2, EmitDefaultValue = false)] public CxfEditableField Password { get; set; }
+	}
+
+	[DataContract]
+	internal sealed class CxfPasskey : CxfCredential
+	{
 		[DataMember(Name = "credentialId", Order = 1)] public string CredentialId { get; set; }
 		[DataMember(Name = "rpId", Order = 2)] public string RpId { get; set; }
 		[DataMember(Name = "username", Order = 3)] public string Username { get; set; }
 		[DataMember(Name = "userDisplayName", Order = 4)] public string UserDisplayName { get; set; }
 		[DataMember(Name = "userHandle", Order = 5)] public string UserHandle { get; set; }
 		[DataMember(Name = "key", Order = 6)] public string Key { get; set; }
+	}
+
+	[DataContract]
+	internal sealed class CxfEditableField
+	{
+		[DataMember(Name = "id", Order = 0, EmitDefaultValue = false)] public string Id { get; set; }
+		[DataMember(Name = "fieldType", Order = 1)] public string FieldType { get; set; }
+		[DataMember(Name = "value", Order = 2)] public string Value { get; set; }
+		[DataMember(Name = "label", Order = 3, EmitDefaultValue = false)] public string Label { get; set; }
 	}
 }
