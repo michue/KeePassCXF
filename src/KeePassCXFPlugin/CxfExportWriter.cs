@@ -37,20 +37,15 @@ internal static class CxfExportWriter
 
 		statusLogger.SetText("Collecting passkeys for CXF export...", LogStatusType.Info);
 		var items = new List<CxfItem>();
-		var entries = exportInfo.DataGroup.GetEntries(true);
-		for (int i = 0; i < entries.UCount; i++)
+		if (!CollectGroupItems(exportInfo.DataGroup, items, statusLogger, out var error))
 		{
-			if (!statusLogger.ContinueWork()) return false;
-
-			var entry = entries.GetAt((uint)i);
-			if (!HasPasskey(entry)) continue;
-
-			if (!TryCreateItem(entry, out var item, out var error))
-			{
-				statusLogger.SetText(error, LogStatusType.Error);
-				return false;
-			}
-			items.Add(item);
+			if (error != null) statusLogger.SetText(error, LogStatusType.Error);
+			return false;
+		}
+		if (!TryCreateCollections(exportInfo.DataGroup, statusLogger, out var collections, out error))
+		{
+			if (error != null) statusLogger.SetText(error, LogStatusType.Error);
+			return false;
 		}
 
 		var account = new CxfAccount
@@ -58,7 +53,7 @@ internal static class CxfExportWriter
 			Id = ToBase64Url(database.RootGroup.Uuid.UuidBytes),
 			Username = databaseFileName,
 			Email = string.Empty,
-			Collections = Array.Empty<CxfCollection>(),
+			Collections = collections,
 			Items = items.ToArray(),
 		};
 		var payload = new CxfHeader
@@ -91,6 +86,53 @@ internal static class CxfExportWriter
 		}
 
 		statusLogger.SetText($"Exported {items.Count} passkey(s).", LogStatusType.Info);
+		return true;
+	}
+
+	private static bool CollectGroupItems(PwGroup group, List<CxfItem> items, IStatusLogger statusLogger, out string error)
+	{
+		error = null;
+		for (uint i = 0; i < group.Entries.UCount; i++)
+		{
+			if (!statusLogger.ContinueWork()) return false;
+			var entry = group.Entries.GetAt(i);
+			if (!HasPasskey(entry)) continue;
+			if (!TryCreateItem(entry, out var item, out error)) return false;
+			items.Add(item);
+		}
+		for (uint i = 0; i < group.Groups.UCount; i++)
+			if (!CollectGroupItems(group.Groups.GetAt(i), items, statusLogger, out error)) return false;
+		return true;
+	}
+
+	private static bool TryCreateCollections(PwGroup parentGroup, IStatusLogger statusLogger,
+		out CxfCollection[] collections, out string error)
+	{
+		collections = new CxfCollection[parentGroup.Groups.UCount];
+		error = null;
+		for (uint i = 0; i < parentGroup.Groups.UCount; i++)
+		{
+			if (!statusLogger.ContinueWork()) return false;
+			var group = parentGroup.Groups.GetAt(i);
+			var linkedItems = new List<CxfLinkedItem>();
+			for (uint entryIndex = 0; entryIndex < group.Entries.UCount; entryIndex++)
+			{
+				var entry = group.Entries.GetAt(entryIndex);
+				if (HasPasskey(entry)) linkedItems.Add(new CxfLinkedItem { Item = ToBase64Url(entry.Uuid.UuidBytes) });
+			}
+
+			if (!TryCreateCollections(group, statusLogger, out var subCollections, out error)) return false;
+			collections[i] = new CxfCollection
+			{
+				Id = ToBase64Url(group.Uuid.UuidBytes),
+				CreationAt = ToOptionalUnixTimeSeconds(group.CreationTime),
+				ModifiedAt = ToOptionalUnixTimeSeconds(group.LastModificationTime),
+				Title = group.Name,
+				Subtitle = string.IsNullOrWhiteSpace(group.Notes) ? null : group.Notes,
+				Items = linkedItems.ToArray(),
+				SubCollections = subCollections.Length == 0 ? null : subCollections,
+			};
+		}
 		return true;
 	}
 
@@ -157,6 +199,12 @@ internal static class CxfExportWriter
 		{
 			if (der != null) MemUtil.ZeroByteArray(der);
 		}
+	}
+
+	private static long? ToOptionalUnixTimeSeconds(DateTime value)
+	{
+		long timestamp = ToUnixTimeSeconds(value);
+		return timestamp < 0 ? (long?)null : timestamp;
 	}
 
 	private static long ToUnixTimeSeconds(DateTime value)
@@ -245,6 +293,19 @@ internal static class CxfExportWriter
 	[DataContract]
 	internal sealed class CxfCollection
 	{
+		[DataMember(Name = "id", Order = 0)] public string Id { get; set; }
+		[DataMember(Name = "creationAt", Order = 1, EmitDefaultValue = false)] public long? CreationAt { get; set; }
+		[DataMember(Name = "modifiedAt", Order = 2, EmitDefaultValue = false)] public long? ModifiedAt { get; set; }
+		[DataMember(Name = "title", Order = 3)] public string Title { get; set; }
+		[DataMember(Name = "subtitle", Order = 4, EmitDefaultValue = false)] public string Subtitle { get; set; }
+		[DataMember(Name = "items", Order = 5)] public CxfLinkedItem[] Items { get; set; }
+		[DataMember(Name = "subCollections", Order = 6, EmitDefaultValue = false)] public CxfCollection[] SubCollections { get; set; }
+	}
+
+	[DataContract]
+	internal sealed class CxfLinkedItem
+	{
+		[DataMember(Name = "item", Order = 0)] public string Item { get; set; }
 	}
 
 	[DataContract]

@@ -61,6 +61,41 @@ public class CxfExportWriterTests
 	}
 
 	[Fact]
+	public void Export_MapsNestedKeePassGroupsToCollectionsAndLinkedItems()
+	{
+		var database = NewDatabase();
+		var folder = new PwGroup(true, true) { Name = "Folder", Notes = "Folder notes" };
+		var nestedFolder = new PwGroup(true, true) { Name = "Nested folder" };
+		var folderEntry = NewPasskeyEntry(new byte[] { 0x30, 0x03, 0x02, 0x01, 0x01 });
+		var nestedEntry = NewPasskeyEntry(new byte[] { 0x30, 0x03, 0x02, 0x01, 0x01 });
+		database.RootGroup.AddGroup(folder, true);
+		Assert.Equal("Folder notes", folder.Notes);
+		folder.AddEntry(folderEntry, true);
+		folder.AddGroup(nestedFolder, true);
+		nestedFolder.AddEntry(nestedEntry, true);
+		using var output = new MemoryStream();
+
+		bool exported = CxfExportWriter.Export(new PwExportInfo(database.RootGroup, database), output, new TestStatusLogger());
+
+		Assert.True(exported);
+		string json = Encoding.UTF8.GetString(output.ToArray());
+		string compactJson = Regex.Replace(json, @"\s+", string.Empty);
+		string folderId = EncodeBase64Url(folder.Uuid.UuidBytes);
+		string nestedFolderId = EncodeBase64Url(nestedFolder.Uuid.UuidBytes);
+		string folderEntryId = EncodeBase64Url(folderEntry.Uuid.UuidBytes);
+		string nestedEntryId = EncodeBase64Url(nestedEntry.Uuid.UuidBytes);
+		Assert.Contains("\"id\":\"" + folderId + "\"", compactJson);
+		Assert.Contains("\"title\":\"Folder\"", compactJson);
+		Assert.Contains("\"subtitle\": \"Folder notes\"", json);
+		Assert.Contains("\"items\":[{\"item\":\"" + folderEntryId + "\"}]", compactJson);
+		Assert.Contains("\"id\":\"" + nestedFolderId + "\"", compactJson);
+		Assert.Contains("\"title\": \"Nested folder\"", json);
+		Assert.Contains("\"items\":[{\"item\":\"" + nestedEntryId + "\"}]", compactJson);
+		Assert.Single(Regex.Matches(compactJson, "\\\"subtitle\\\":"));
+		Assert.Single(Regex.Matches(compactJson, "\\\"subCollections\\\":"));
+	}
+
+	[Fact]
 	public void Export_SkipsEntriesWithoutPasskeys()
 	{
 		var database = NewDatabase();
