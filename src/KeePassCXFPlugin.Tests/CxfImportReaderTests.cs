@@ -19,7 +19,7 @@ public class CxfImportReaderTests
 {
 	private const string PrivateKey = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgARu_0sCt20EpgVxb4Puq3Ga5VVLpuTY75ngvZlyq3X6hRANCAASmdk1xLsK0oOlhxIPp0d1ZuS0sT9nf6BZtSelhqvLBW0fOL33l_bXgsr_STUHjCLn8l6gcRJwe7OQvbQubZ1dY";
 	private const string ItemId = "AAECAwQFBgcICQoLDA0ODw";
-	private const string Prefix = "{\"version\":{\"major\":1,\"minor\":0},\"exporterRpId\":\"exporter.example.com\",\"exporterDisplayName\":\"Exporter\",\"timestamp\":1705228800,\"accounts\":[{\"id\":\"YWNjb3VudA\",\"username\":\"account-user\",\"email\":\"user@example.com\",\"items\":[{\"id\":\"" + ItemId + "\",\"creationAt\":1705142400,\"modifiedAt\":1705228800,\"title\":\"Example passkey\",\"credentials\":[";
+	private const string Prefix = "{\"version\":{\"major\":1,\"minor\":0},\"exporterRpId\":\"exporter.example.com\",\"exporterDisplayName\":\"Exporter\",\"timestamp\":1705228800,\"accounts\":[{\"id\":\"YWNjb3VudA\",\"username\":\"account-user\",\"email\":\"user@example.com\",\"collections\":[],\"items\":[{\"id\":\"" + ItemId + "\",\"creationAt\":1705142400,\"modifiedAt\":1705228800,\"title\":\"Example passkey\",\"credentials\":[";
 	private const string Passkey = "{\"type\":\"passkey\",\"credentialId\":\"Y3JlZGVudGlhbElk\",\"rpId\":\"example.com\",\"username\":\"passkey-user\",\"userDisplayName\":\"Display Name\",\"userHandle\":\"dXNlci1oYW5kbGU\",\"key\":\"" + PrivateKey + "\"}";
 	private const string Suffix = "]}]}]}";
 
@@ -48,6 +48,38 @@ public class CxfImportReaderTests
 			Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1705228800).UtcDateTime, entry.LastModificationTime);
 		}
 	}
+
+	[Fact]
+	public void Import_RejectsAccountWithMissingOrInvalidRequiredFields()
+	{
+		string account = "\"id\":\"YWNjb3VudA\",\"username\":\"account-user\",\"email\":\"user@example.com\",\"collections\":[],\"items\":[]";
+		string[] invalidAccounts =
+		{
+			account.Replace("\"id\":\"YWNjb3VudA\",", string.Empty),
+			account.Replace("\"id\":\"YWNjb3VudA\"", "\"id\":\"\""),
+			account.Replace("\"username\":\"account-user\",", string.Empty),
+			account.Replace("\"username\":\"account-user\"", "\"username\":null"),
+			account.Replace("\"email\":\"user@example.com\",", string.Empty),
+			account.Replace("\"email\":\"user@example.com\"", "\"email\":null"),
+			account.Replace("\"collections\":[],", string.Empty),
+			account.Replace("\"collections\":[]", "\"collections\":null"),
+			account.Replace("\"collections\":[]", "\"collections\":{}"),
+			account.Replace("\"items\":[]", string.Empty),
+			account.Replace("\"items\":[]", "\"items\":null"),
+			account.Replace("\"items\":[]", "\"items\":{}"),
+		};
+
+		foreach (string invalidAccount in invalidAccounts)
+		{
+			var database = NewDatabase();
+			using (var input = JsonStream(AccountDocument(invalidAccount)))
+			{
+				Assert.Throws<InvalidDataException>(() => new CxfFileFormatProvider().Import(database, input, new TestStatusLogger()));
+				Assert.Equal((uint)0, database.RootGroup.GetEntries(true).UCount);
+			}
+		}
+	}
+
 
 	[Fact]
 	public void Import_RejectsMissingOrEmptyItemId()
@@ -132,6 +164,9 @@ public class CxfImportReaderTests
 		Assert.True(provider.SupportsExport);
 		Assert.True(provider.ImportAppendsToRootGroupOnly);
 	}
+
+	private static string AccountDocument(string account) =>
+		"{\"version\":{\"major\":1,\"minor\":0},\"exporterRpId\":\"exporter.example.com\",\"exporterDisplayName\":\"Exporter\",\"timestamp\":1705228800,\"accounts\":[{" + account + "}]}";
 
 	private static PwDatabase NewDatabase()
 	{

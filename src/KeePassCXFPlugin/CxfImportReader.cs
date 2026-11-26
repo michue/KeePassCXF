@@ -103,8 +103,19 @@ internal static class CxfImportReader
 		foreach (var value in accounts)
 		{
 			var account = AsObject(value, "account");
-			var itemsValue = GetValue(account, "items");
-			var items = itemsValue == null ? Array.Empty<object>() : AsArray(itemsValue, "items");
+			var accountId = GetRequiredString(account, "id");
+			if (string.IsNullOrWhiteSpace(accountId))
+				throw new SerializationException("The CXF account ID must not be empty.");
+			string username = GetRequiredString(account, "username");
+			string email = GetRequiredString(account, "email");
+			var collectionValues = AsArray(GetValue(account, "collections"), "account collections");
+			var collections = new CxfExportWriter.CxfCollection[collectionValues.Length];
+			for (int i = 0; i < collectionValues.Length; i++)
+			{
+				AsObject(collectionValues[i], "account collection");
+				collections[i] = new CxfExportWriter.CxfCollection();
+			}
+			var items = AsArray(GetValue(account, "items"), "account items");
 			var parsedItems = new List<CxfExportWriter.CxfItem>();
 			foreach (var itemValue in items)
 			{
@@ -146,9 +157,10 @@ internal static class CxfImportReader
 
 			parsedAccounts.Add(new CxfExportWriter.CxfAccount
 			{
-				Id = GetString(account, "id"),
-				Username = GetString(account, "username"),
-				Email = GetString(account, "email"),
+				Id = accountId,
+				Username = username,
+				Email = email,
+				Collections = collections,
 				Items = parsedItems.ToArray(),
 			});
 		}
@@ -184,6 +196,14 @@ internal static class CxfImportReader
 		if (result == null) return null;
 		if (result is string text) return text;
 		throw new SerializationException($"The CXF field '{name}' must be a string.");
+	}
+
+	private static string GetRequiredString(Dictionary<string, object> value, string name)
+	{
+		if (!value.ContainsKey(name))
+			throw new SerializationException($"The CXF account is missing the required '{name}' field.");
+		return GetString(value, name)
+			?? throw new SerializationException($"The CXF account field '{name}' must not be null.");
 	}
 
 	private static int GetInt32(Dictionary<string, object> value, string name)
