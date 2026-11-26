@@ -59,6 +59,8 @@ internal static class CxfImportReader
 				foreach (var item in account.Items)
 				{
 					if (item?.Credentials == null) continue;
+					if (item.Scope?.Urls != null && item.Scope.Urls.Length > 1)
+						statusLogger.SetText($"Passkey '{item.Title ?? string.Empty}' specifies multiple scope URLs; only the first URL will be imported.", LogStatusType.Warning);
 					foreach (var credential in item.Credentials)
 					{
 						if (!statusLogger.ContinueWork()) return;
@@ -179,6 +181,8 @@ internal static class CxfImportReader
 					CreationAt = GetNullableInt64(item, "creationAt"),
 					ModifiedAt = GetNullableInt64(item, "modifiedAt"),
 					Title = GetString(item, "title"),
+					Subtitle = GetString(item, "subtitle"),
+					Scope = ParseCredentialScope(GetValue(item, "scope")),
 					Credentials = credentials.ToArray(),
 				});
 			}
@@ -205,6 +209,32 @@ internal static class CxfImportReader
 			Timestamp = GetInt64(root, "timestamp"),
 			Accounts = parsedAccounts.ToArray(),
 		};
+	}
+
+	private static CxfExportWriter.CxfCredentialScope ParseCredentialScope(object value)
+	{
+		if (value == null) return null;
+		var scope = AsObject(value, "credential scope");
+		return new CxfExportWriter.CxfCredentialScope
+		{
+			Urls = GetStringArray(scope, "urls", "credential scope URLs"),
+			AndroidApps = GetStringArray(scope, "androidApps", "credential scope Android apps"),
+		};
+	}
+
+	private static string[] GetStringArray(Dictionary<string, object> value, string name, string description)
+	{
+		object arrayValue = GetValue(value, name);
+		if (arrayValue == null) return Array.Empty<string>();
+		var array = AsArray(arrayValue, description);
+		var strings = new string[array.Length];
+		for (int i = 0; i < array.Length; i++)
+		{
+			if (!(array[i] is string text))
+				throw new SerializationException($"The CXF {description} must contain only strings.");
+			strings[i] = text;
+		}
+		return strings;
 	}
 
 	private static CxfExportWriter.CxfCollection ParseCollection(object value)
@@ -343,6 +373,9 @@ internal static class CxfImportReader
 			if (TryGetItemUuid(item.Id, out var itemUuid))
 				entry.Uuid = itemUuid;
 			entry.Strings.Set(PwDefs.TitleField, new ProtectedString(false, item.Title ?? string.Empty));
+			entry.Strings.Set(PwDefs.NotesField, new ProtectedString(false, item.Subtitle ?? string.Empty));
+			entry.Strings.Set(PwDefs.UrlField, new ProtectedString(false,
+				item.Scope?.Urls != null && item.Scope.Urls.Length > 0 ? item.Scope.Urls[0] : string.Empty));
 			entry.Strings.Set(PwDefs.UserNameField, new ProtectedString(false, accountUsername));
 			entry.Strings.Set(PwDefs.PasswordField, ProtectedString.EmptyEx);
 			entry.Strings.Set(FieldCredentialId, new ProtectedString(true, credential.CredentialId));

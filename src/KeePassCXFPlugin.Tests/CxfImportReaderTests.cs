@@ -38,6 +38,8 @@ public class CxfImportReaderTests
 			var entry = entries.GetAt(0);
 			Assert.Equal(new byte[] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 }, entry.Uuid.UuidBytes);
 			Assert.Equal("Example passkey", entry.Strings.ReadSafe(PwDefs.TitleField));
+			Assert.Equal(string.Empty, entry.Strings.ReadSafe(PwDefs.NotesField));
+			Assert.Equal(string.Empty, entry.Strings.ReadSafe(PwDefs.UrlField));
 			Assert.Equal("account-user", entry.Strings.ReadSafe(PwDefs.UserNameField));
 			Assert.Equal("Y3JlZGVudGlhbElk", entry.Strings.ReadSafe("KPEX_PASSKEY_CREDENTIAL_ID"));
 			Assert.Equal("example.com", entry.Strings.ReadSafe("KPEX_PASSKEY_RELYING_PARTY"));
@@ -49,6 +51,25 @@ public class CxfImportReaderTests
 			Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1705142400).UtcDateTime, entry.CreationTime);
 			Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1705228800).UtcDateTime, entry.LastModificationTime);
 		}
+	}
+
+	[Fact]
+	public void Import_MapsSubtitleAndFirstScopeUrlAndWarnsForMultipleUrls()
+	{
+		var database = NewDatabase();
+		var logger = new TestStatusLogger();
+		string document = (Prefix + Passkey + Suffix).Replace(
+			"\"title\":\"Example passkey\",",
+			"\"title\":\"Example passkey\",\"subtitle\":\"Imported notes\",\"scope\":{\"urls\":[\"https://first.example/login\",\"https://second.example/login\"],\"androidApps\":[]},");
+		using (var input = JsonStream(document))
+			new CxfFileFormatProvider().Import(database, input, logger);
+
+		var entry = database.RootGroup.GetEntries(true).GetAt(0);
+		Assert.Equal("Imported notes", entry.Strings.ReadSafe(PwDefs.NotesField));
+		Assert.Equal("https://first.example/login", entry.Strings.ReadSafe(PwDefs.UrlField));
+		Assert.Single(logger.Warnings);
+		Assert.Contains("multiple scope URLs", logger.Warnings[0]);
+		Assert.Contains("first URL", logger.Warnings[0]);
 	}
 
 	[Fact]

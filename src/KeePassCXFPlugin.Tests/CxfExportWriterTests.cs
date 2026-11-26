@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 using System;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using KeePass.DataExchange;
@@ -29,6 +30,8 @@ public class CxfExportWriterTests
 		byte[] der = { 0x30, 0x03, 0x02, 0x01, 0x01 };
 		var database = NewDatabase();
 		var entry = NewPasskeyEntry(der);
+		entry.Strings.Set(PwDefs.NotesField, new ProtectedString(false, "Passkey notes"));
+		entry.Strings.Set(PwDefs.UrlField, new ProtectedString(false, "https://example.com/login"));
 		var secondEntry = NewPasskeyEntry(der);
 		secondEntry.Strings.Set(PwDefs.TitleField, new ProtectedString(false, "Second passkey"));
 		database.RootGroup.AddEntry(entry, true);
@@ -47,6 +50,10 @@ public class CxfExportWriterTests
 		Assert.Contains("\"exporterDisplayName\":\"KeePassCXF\"", compactJson);
 		Assert.Contains("\"id\":\"" + EncodeBase64Url(database.RootGroup.Uuid.UuidBytes) + "\",\"username\":\"cxf-import-test.kdbx\"", compactJson);
 		Assert.Contains("\"id\":\"" + EncodeBase64Url(entry.Uuid.UuidBytes) + "\"", compactJson);
+		Assert.Contains("\"subtitle\": \"Passkey notes\"", json);
+		Assert.Contains("\"scope\":{\"urls\":[\"https:\\/\\/example.com\\/login\"],\"androidApps\":[]}", compactJson);
+		Assert.Single(Regex.Matches(compactJson, "\\\"subtitle\\\":").Cast<Match>());
+		Assert.Single(Regex.Matches(compactJson, "\\\"scope\\\":").Cast<Match>());
 		Assert.Contains("\"id\":\"" + EncodeBase64Url(secondEntry.Uuid.UuidBytes) + "\"", compactJson);
 		Assert.Equal(1, Regex.Matches(compactJson, "\\\"accounts\\\":\\[\\{").Count);
 		Assert.Equal(2, Regex.Matches(compactJson, "\\\"type\\\":\\\"passkey\\\"").Count);

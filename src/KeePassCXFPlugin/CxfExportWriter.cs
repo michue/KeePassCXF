@@ -175,12 +175,17 @@ internal static class CxfExportWriter
 				UserHandle = entry.Strings.ReadSafe(FieldUserHandle),
 				Key = ToBase64Url(der),
 			};
+			string url = entry.Strings.ReadSafe(PwDefs.UrlField);
 			item = new CxfItem
 			{
 				Id = ToBase64Url(entry.Uuid.UuidBytes),
 				CreationAt = ToUnixTimeSeconds(entry.CreationTime),
 				ModifiedAt = ToUnixTimeSeconds(entry.LastModificationTime),
 				Title = entry.Strings.ReadSafe(PwDefs.TitleField),
+				Subtitle = string.IsNullOrEmpty(entry.Strings.ReadSafe(PwDefs.NotesField))
+					? null
+					: entry.Strings.ReadSafe(PwDefs.NotesField),
+				Scope = string.IsNullOrEmpty(url) ? null : new CxfCredentialScope { Urls = new[] { url }, AndroidApps = Array.Empty<string>() },
 				Credentials = new[] { passkey },
 			};
 			return true;
@@ -316,7 +321,16 @@ internal static class CxfExportWriter
 		[DataMember(Name = "creationAt", Order = 1, EmitDefaultValue = false)] public long? CreationAt { get; set; }
 		[DataMember(Name = "modifiedAt", Order = 2, EmitDefaultValue = false)] public long? ModifiedAt { get; set; }
 		[DataMember(Name = "title", Order = 3)] public string Title { get; set; }
-		[DataMember(Name = "credentials", Order = 4)] public CxfPasskey[] Credentials { get; set; }
+		[DataMember(Name = "subtitle", Order = 4, EmitDefaultValue = false)] public string Subtitle { get; set; }
+		[DataMember(Name = "scope", Order = 5, EmitDefaultValue = false)] public CxfCredentialScope Scope { get; set; }
+		[DataMember(Name = "credentials", Order = 6)] public CxfPasskey[] Credentials { get; set; }
+	}
+
+	[DataContract]
+	internal sealed class CxfCredentialScope
+	{
+		[DataMember(Name = "urls", Order = 0)] public string[] Urls { get; set; }
+		[DataMember(Name = "androidApps", Order = 1)] public string[] AndroidApps { get; set; }
 	}
 
 	[DataContract]
