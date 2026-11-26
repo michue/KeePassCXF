@@ -1,6 +1,7 @@
 ﻿// SPDX-FileCopyrightText: Copyright (C) 2026 Michael Hüpkes
 // SPDX-License-Identifier: GPL-3.0-or-later
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -19,6 +20,7 @@ public class CxfImportReaderTests
 {
 	private const string PrivateKey = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgARu_0sCt20EpgVxb4Puq3Ga5VVLpuTY75ngvZlyq3X6hRANCAASmdk1xLsK0oOlhxIPp0d1ZuS0sT9nf6BZtSelhqvLBW0fOL33l_bXgsr_STUHjCLn8l6gcRJwe7OQvbQubZ1dY";
 	private const string ItemId = "AAECAwQFBgcICQoLDA0ODw";
+	private const string CollectionId = "EBESExQVFhcYGRobHB0eHw";
 	private const string Prefix = "{\"version\":{\"major\":1,\"minor\":0},\"exporterRpId\":\"exporter.example.com\",\"exporterDisplayName\":\"Exporter\",\"timestamp\":1705228800,\"accounts\":[{\"id\":\"YWNjb3VudA\",\"username\":\"account-user\",\"email\":\"user@example.com\",\"collections\":[],\"items\":[{\"id\":\"" + ItemId + "\",\"creationAt\":1705142400,\"modifiedAt\":1705228800,\"title\":\"Example passkey\",\"credentials\":[";
 	private const string Passkey = "{\"type\":\"passkey\",\"credentialId\":\"Y3JlZGVudGlhbElk\",\"rpId\":\"example.com\",\"username\":\"passkey-user\",\"userDisplayName\":\"Display Name\",\"userHandle\":\"dXNlci1oYW5kbGU\",\"key\":\"" + PrivateKey + "\"}";
 	private const string Suffix = "]}]}]}";
@@ -47,6 +49,68 @@ public class CxfImportReaderTests
 			Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1705142400).UtcDateTime, entry.CreationTime);
 			Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1705228800).UtcDateTime, entry.LastModificationTime);
 		}
+	}
+
+	[Fact]
+	public void Import_CreatesNestedGroupsAndPlacesEntriesUsingCollectionLinks()
+	{
+		var database = NewDatabase();
+		var logger = new TestStatusLogger();
+		string nestedId = "ICEiIyQlJicoKSorLC0uLw";
+		string collections = "{\"id\":\"" + CollectionId + "\",\"title\":\"Imported folder\",\"subtitle\":\"Folder notes\",\"items\":[],\"subCollections\":[{\"id\":\"" + nestedId + "\",\"title\":\"Nested folder\",\"items\":[{\"item\":\"" + ItemId + "\"}]}]}";
+		using (var input = JsonStream(DocumentWithCollections(collections)))
+			new CxfFileFormatProvider().Import(database, input, logger);
+
+		var folder = database.RootGroup.Groups.GetAt(0);
+		var nestedFolder = folder.Groups.GetAt(0);
+		var entry = database.RootGroup.GetEntries(true).GetAt(0);
+		Assert.Equal(new byte[] { 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F }, folder.Uuid.UuidBytes);
+		Assert.Equal("Imported folder", folder.Name);
+		Assert.Equal("Folder notes", folder.Notes);
+		Assert.Equal("Nested folder", nestedFolder.Name);
+		Assert.Equal(new byte[] { 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F }, nestedFolder.Uuid.UuidBytes);
+		Assert.Same(nestedFolder, entry.ParentGroup);
+		Assert.Empty(logger.Warnings);
+	}
+
+	[Fact]
+	public void Import_InvalidCollectionUuidCreatesGroupWithImportedPropertiesWithoutWarning()
+	{
+		var database = NewDatabase();
+		var logger = new TestStatusLogger();
+		string collection = "{\"id\":\"collection not uuid\",\"creationAt\":1705142400,\"modifiedAt\":1705228800,\"title\":\"Imported folder\",\"subtitle\":\"Folder notes\",\"items\":[{\"item\":\"" + ItemId + "\"}]}";
+		using (var input = JsonStream(DocumentWithCollections(collection)))
+			new CxfFileFormatProvider().Import(database, input, logger);
+
+		var importedGroup = database.RootGroup.Groups.GetAt(0);
+		var entry = importedGroup.Entries.GetAt(0);
+		Assert.NotEqual(PwUuid.Zero, importedGroup.Uuid);
+		Assert.Equal("Imported folder", importedGroup.Name);
+		Assert.Equal("Folder notes", importedGroup.Notes);
+		Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1705142400).UtcDateTime, importedGroup.CreationTime);
+		Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1705228800).UtcDateTime, importedGroup.LastModificationTime);
+		Assert.Same(importedGroup, entry.ParentGroup);
+		Assert.Empty(logger.Warnings);
+	}
+
+	[Fact]
+	public void Import_ReusesExistingGroupWithoutChangingItAndLogsWarning()
+	{
+		var database = NewDatabase();
+		var existingGroup = new PwGroup(true, true) { Name = "Keep this name", Notes = "Keep these notes" };
+		existingGroup.Uuid = new PwUuid(Convert.FromBase64String("EBESExQVFhcYGRobHB0eHw=="));
+		database.RootGroup.AddGroup(existingGroup, true);
+		var logger = new TestStatusLogger();
+		string collection = "{\"id\":\"" + CollectionId + "\",\"title\":\"Incoming name\",\"subtitle\":\"Incoming notes\",\"items\":[{\"item\":\"" + ItemId + "\"}]}";
+		using (var input = JsonStream(DocumentWithCollections(collection)))
+			new CxfFileFormatProvider().Import(database, input, logger);
+
+		var importedEntry = existingGroup.Entries.GetAt(0);
+		Assert.Same(existingGroup, importedEntry.ParentGroup);
+		Assert.Equal("Keep this name", existingGroup.Name);
+		Assert.Equal("Keep these notes", existingGroup.Notes);
+		Assert.Single(logger.Warnings);
+		Assert.Contains(CollectionId, logger.Warnings[0]);
 	}
 
 	[Fact]
@@ -162,11 +226,14 @@ public class CxfImportReaderTests
 
 		Assert.True(provider.SupportsImport);
 		Assert.True(provider.SupportsExport);
-		Assert.True(provider.ImportAppendsToRootGroupOnly);
+		Assert.False(provider.ImportAppendsToRootGroupOnly);
 	}
 
 	private static string AccountDocument(string account) =>
 		"{\"version\":{\"major\":1,\"minor\":0},\"exporterRpId\":\"exporter.example.com\",\"exporterDisplayName\":\"Exporter\",\"timestamp\":1705228800,\"accounts\":[{" + account + "}]}";
+
+	private static string DocumentWithCollections(string collections) =>
+		(Prefix + Passkey + Suffix).Replace("\"collections\":[]", "\"collections\":[" + collections + "]");
 
 	private static PwDatabase NewDatabase()
 	{
@@ -179,10 +246,16 @@ public class CxfImportReaderTests
 
 	private sealed class TestStatusLogger : IStatusLogger
 	{
+		internal List<string> Warnings { get; } = new List<string>();
+
 		public void StartLogging(string strOperation, bool bWriteOperationToLog) { }
 		public void EndLogging() { }
 		public bool SetProgress(uint uPercent) => true;
-		public bool SetText(string strText, LogStatusType lsType) => true;
+		public bool SetText(string strText, LogStatusType lsType)
+		{
+			if (lsType == LogStatusType.Warning) Warnings.Add(strText);
+			return true;
+		}
 		public bool ContinueWork() => true;
 	}
 }

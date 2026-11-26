@@ -10,7 +10,7 @@ internal sealed class CxfFileFormatProvider : FileFormatProvider
 {
 	public override bool SupportsImport => true;
 	public override bool SupportsExport => true;
-	public override bool ImportAppendsToRootGroupOnly => true;
+	public override bool ImportAppendsToRootGroupOnly => false;
 	public override bool RequiresFile => true;
 	public override string FormatName => "Client Exchange Format (CXF)";
 	public override string DefaultExtension => "json";

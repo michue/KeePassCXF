@@ -306,6 +306,7 @@ internal static class CxfExportWriter
 	internal sealed class CxfLinkedItem
 	{
 		[DataMember(Name = "item", Order = 0)] public string Item { get; set; }
+		[DataMember(Name = "account", Order = 1, EmitDefaultValue = false)] public string Account { get; set; }
 	}
 
 	[DataContract]

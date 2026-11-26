@@ -47,7 +47,7 @@ internal static class CxfImportReader
 			throw ReportInvalidDocument(statusLogger, ex);
 		}
 
-		var importedEntries = new List<PwEntry>();
+		var importedEntries = new List<ImportedEntry>();
 		int credentialsRead = 0;
 		try
 		{
@@ -65,7 +65,13 @@ internal static class CxfImportReader
 						if (credential == null || !string.Equals(credential.Type, "passkey", StringComparison.Ordinal)) continue;
 
 						statusLogger.SetText($"Validating passkey '{item.Title ?? string.Empty}'...", LogStatusType.Info);
-						importedEntries.Add(CreateEntry(accountUsername, item, credential));
+						importedEntries.Add(new ImportedEntry
+						{
+							Account = account,
+							ItemId = item.Id,
+							Entry = CreateEntry(accountUsername, item, credential),
+							TargetGroup = database.RootGroup,
+						});
 						credentialsRead++;
 					}
 				}
@@ -90,8 +96,33 @@ internal static class CxfImportReader
 		if (!statusLogger.ContinueWork()) return;
 
 		statusLogger.SetText($"Importing {credentialsRead} passkey(s)...", LogStatusType.Info);
-		foreach (var entry in importedEntries)
-			database.RootGroup.AddEntry(entry, true);
+		var existingGroups = GetGroupsByUuid(database.RootGroup);
+		var createdGroups = new List<GroupAddition>();
+		var warnedGroupIds = new HashSet<string>(StringComparer.Ordinal);
+		foreach (var account in document.Accounts)
+		{
+			var linkedGroups = new Dictionary<string, PwGroup>(StringComparer.Ordinal);
+			if (!ResolveCollections(account.Collections, account.Id, database.RootGroup, existingGroups, createdGroups,
+				linkedGroups, warnedGroupIds, statusLogger)) return;
+
+			foreach (var importedEntry in importedEntries)
+			{
+				if (!ReferenceEquals(importedEntry.Account, account)) continue;
+				if (linkedGroups.TryGetValue(importedEntry.ItemId, out var group))
+					importedEntry.TargetGroup = group;
+			}
+		}
+
+		foreach (var addition in createdGroups)
+		{
+			if (!statusLogger.ContinueWork()) return;
+			addition.Parent.AddGroup(addition.Group, true);
+		}
+		foreach (var importedEntry in importedEntries)
+		{
+			if (!statusLogger.ContinueWork()) return;
+			importedEntry.TargetGroup.AddEntry(importedEntry.Entry, true);
+		}
 		statusLogger.SetText($"Imported {credentialsRead} passkey(s).", LogStatusType.Info);
 	}
 
@@ -111,10 +142,7 @@ internal static class CxfImportReader
 			var collectionValues = AsArray(GetValue(account, "collections"), "account collections");
 			var collections = new CxfExportWriter.CxfCollection[collectionValues.Length];
 			for (int i = 0; i < collectionValues.Length; i++)
-			{
-				AsObject(collectionValues[i], "account collection");
-				collections[i] = new CxfExportWriter.CxfCollection();
-			}
+				collections[i] = ParseCollection(collectionValues[i]);
 			var items = AsArray(GetValue(account, "items"), "account items");
 			var parsedItems = new List<CxfExportWriter.CxfItem>();
 			foreach (var itemValue in items)
@@ -176,6 +204,52 @@ internal static class CxfImportReader
 			ExporterDisplayName = GetString(root, "exporterDisplayName"),
 			Timestamp = GetInt64(root, "timestamp"),
 			Accounts = parsedAccounts.ToArray(),
+		};
+	}
+
+	private static CxfExportWriter.CxfCollection ParseCollection(object value)
+	{
+		var collection = AsObject(value, "collection");
+		string id = GetRequiredString(collection, "id");
+		if (string.IsNullOrWhiteSpace(id))
+			throw new SerializationException("The CXF collection ID must not be empty.");
+		string title = GetRequiredString(collection, "title");
+		var linkedItems = AsArray(GetValue(collection, "items"), "collection items");
+		var parsedLinkedItems = new CxfExportWriter.CxfLinkedItem[linkedItems.Length];
+		for (int i = 0; i < linkedItems.Length; i++)
+		{
+			var linkedItem = AsObject(linkedItems[i], "linked item");
+			string itemId = GetRequiredString(linkedItem, "item");
+			if (string.IsNullOrWhiteSpace(itemId))
+				throw new SerializationException("The CXF linked item ID must not be empty.");
+			parsedLinkedItems[i] = new CxfExportWriter.CxfLinkedItem
+			{
+				Item = itemId,
+				Account = GetString(linkedItem, "account"),
+			};
+		}
+
+		var subCollectionsValue = GetValue(collection, "subCollections");
+		var subCollectionValues = subCollectionsValue == null
+			? Array.Empty<object>()
+			: AsArray(subCollectionsValue, "sub-collections");
+		var subCollections = new CxfExportWriter.CxfCollection[subCollectionValues.Length];
+		for (int i = 0; i < subCollectionValues.Length; i++)
+			subCollections[i] = ParseCollection(subCollectionValues[i]);
+
+		long? creationAt = GetNullableInt64(collection, "creationAt");
+		long? modifiedAt = GetNullableInt64(collection, "modifiedAt");
+		if (creationAt < 0 || modifiedAt < 0)
+			throw new SerializationException("The CXF collection timestamps must not be negative.");
+		return new CxfExportWriter.CxfCollection
+		{
+			Id = id,
+			CreationAt = creationAt,
+			ModifiedAt = modifiedAt,
+			Title = title,
+			Subtitle = GetString(collection, "subtitle"),
+			Items = parsedLinkedItems,
+			SubCollections = subCollections,
 		};
 	}
 
@@ -321,6 +395,88 @@ internal static class CxfImportReader
 		}
 	}
 
+	private static Dictionary<string, PwGroup> GetGroupsByUuid(PwGroup rootGroup)
+	{
+		var groups = new Dictionary<string, PwGroup>(StringComparer.Ordinal)
+		{
+			[ToBase64Url(rootGroup.Uuid.UuidBytes)] = rootGroup,
+		};
+		var descendants = rootGroup.GetGroups(true);
+		for (uint i = 0; i < descendants.UCount; i++)
+		{
+			var group = descendants.GetAt(i);
+			string id = ToBase64Url(group.Uuid.UuidBytes);
+			if (!groups.ContainsKey(id)) groups.Add(id, group);
+		}
+		return groups;
+	}
+
+	private static bool ResolveCollections(CxfExportWriter.CxfCollection[] collections, string accountId, PwGroup parentGroup,
+		Dictionary<string, PwGroup> groupsByUuid, List<GroupAddition> createdGroups,
+		Dictionary<string, PwGroup> linkedGroups, HashSet<string> warnedGroupIds, IStatusLogger statusLogger)
+	{
+		foreach (var collection in collections)
+		{
+			if (!statusLogger.ContinueWork()) return false;
+			byte[] uuidBytes = null;
+			PwGroup group;
+			try
+			{
+				try
+				{
+					uuidBytes = DecodeBase64Url(collection.Id, "collection ID");
+				}
+				catch (InvalidDataException)
+				{
+				}
+				bool hasKeePassUuid = uuidBytes != null && uuidBytes.Length == 16 && !new PwUuid(uuidBytes).IsZero;
+				string canonicalId = hasKeePassUuid ? ToBase64Url(uuidBytes) : null;
+				if (hasKeePassUuid && groupsByUuid.TryGetValue(canonicalId, out group))
+				{
+					if (warnedGroupIds.Add(canonicalId))
+						statusLogger.SetText($"A KeePass group with collection ID '{canonicalId}' already exists; it was reused without changing its title or other properties.", LogStatusType.Warning);
+				}
+				else
+				{
+					group = new PwGroup(true, true)
+					{
+						Name = collection.Title,
+						Notes = collection.Subtitle ?? string.Empty,
+					};
+					if (hasKeePassUuid)
+					{
+						group.Uuid = new PwUuid(uuidBytes);
+						groupsByUuid.Add(canonicalId, group);
+					}
+					if (collection.CreationAt.HasValue)
+						group.CreationTime = DateTimeOffset.FromUnixTimeSeconds(collection.CreationAt.Value).UtcDateTime;
+					if (collection.ModifiedAt.HasValue)
+						group.LastModificationTime = DateTimeOffset.FromUnixTimeSeconds(collection.ModifiedAt.Value).UtcDateTime;
+					createdGroups.Add(new GroupAddition { Parent = parentGroup, Group = group });
+				}
+
+				foreach (var linkedItem in collection.Items)
+				{
+					if (linkedItem.Account != null
+						&& !string.Equals(linkedItem.Account, accountId, StringComparison.Ordinal)) continue;
+					if (!linkedGroups.ContainsKey(linkedItem.Item))
+						linkedGroups.Add(linkedItem.Item, group);
+				}
+			}
+			finally
+			{
+				if (uuidBytes != null) MemUtil.ZeroByteArray(uuidBytes);
+			}
+
+			if (!ResolveCollections(collection.SubCollections, accountId, group, groupsByUuid, createdGroups,
+				linkedGroups, warnedGroupIds, statusLogger)) return false;
+		}
+		return true;
+	}
+
+	private static string ToBase64Url(byte[] value) =>
+		Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
 	private static void ValidateBase64Url(string value, string description)
 	{
 		byte[] decoded = DecodeBase64Url(value, description);
@@ -446,6 +602,20 @@ internal static class CxfImportReader
 			pem.Append(base64, i, Math.Min(64, base64.Length - i)).Append("\r\n");
 		pem.Append("-----END PRIVATE KEY-----\r\n");
 		return pem.ToString();
+	}
+
+	private sealed class ImportedEntry
+	{
+		internal CxfExportWriter.CxfAccount Account { get; set; }
+		internal string ItemId { get; set; }
+		internal PwEntry Entry { get; set; }
+		internal PwGroup TargetGroup { get; set; }
+	}
+
+	private sealed class GroupAddition
+	{
+		internal PwGroup Parent { get; set; }
+		internal PwGroup Group { get; set; }
 	}
 
 	private static InvalidDataException ReportInvalidDocument(IStatusLogger statusLogger, Exception exception)
