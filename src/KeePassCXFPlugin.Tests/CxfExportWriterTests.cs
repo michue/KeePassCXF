@@ -3,6 +3,7 @@
 using System;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 using KeePass.DataExchange;
 using KeePassCXF;
 using KeePassLib;
@@ -33,16 +34,19 @@ public class CxfExportWriterTests
 
 		Assert.True(exported);
 		var json = Encoding.UTF8.GetString(output.ToArray());
-		Assert.Contains("\"major\":1", json);
-		Assert.Contains("\"minor\":0", json);
-		Assert.Contains("\"exporterDisplayName\":\"KeePassCXF\"", json);
-		Assert.Contains("\"type\":\"passkey\"", json);
-		Assert.Contains("\"credentialId\":\"Y3JlZGVudGlhbElk\"", json);
-		Assert.Contains("\"rpId\":\"example.com\"", json);
-		Assert.Contains("\"username\":\"passkey-user\"", json);
-		Assert.Contains("\"userHandle\":\"dXNlci1oYW5kbGU\"", json);
-		Assert.Contains("\"key\":\"MAMCAQE\"", json);
-		Assert.Contains("\"collections\":[]", json);
+		Assert.Contains("\n", json);
+		Assert.Contains("\n  \"version\"", json);
+		string compactJson = Regex.Replace(json, @"\s+", string.Empty);
+		Assert.Contains("\"major\":1", compactJson);
+		Assert.Contains("\"minor\":0", compactJson);
+		Assert.Contains("\"exporterDisplayName\":\"KeePassCXF\"", compactJson);
+		Assert.Contains("\"type\":\"passkey\"", compactJson);
+		Assert.Contains("\"credentialId\":\"Y3JlZGVudGlhbElk\"", compactJson);
+		Assert.Contains("\"rpId\":\"example.com\"", compactJson);
+		Assert.Contains("\"username\":\"passkey-user\"", compactJson);
+		Assert.Contains("\"userHandle\":\"dXNlci1oYW5kbGU\"", compactJson);
+		Assert.Contains("\"key\":\"MAMCAQE\"", compactJson);
+		Assert.Contains("\"collections\":[]", compactJson);
 		Assert.DoesNotContain("-----BEGIN PRIVATE KEY-----", json);
 	}
 
@@ -57,7 +61,7 @@ public class CxfExportWriterTests
 
 		Assert.True(exported);
 		var json = Encoding.UTF8.GetString(output.ToArray());
-		Assert.Contains("\"accounts\":[]", json);
+		Assert.Contains("\"accounts\":[]", Regex.Replace(json, @"\s+", string.Empty));
 	}
 
 	[Fact]

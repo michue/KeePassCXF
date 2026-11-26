@@ -6,6 +6,7 @@ using System.IO;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Text;
+using System.Xml;
 using KeePass.DataExchange;
 using KeePassLib;
 using KeePassLib.Interfaces;
@@ -57,7 +58,11 @@ internal static class CxfExportWriter
 		var serializer = new DataContractJsonSerializer(typeof(CxfHeader));
 		using (var json = new MemoryStream())
 		{
-			serializer.WriteObject(json, payload);
+			using (XmlDictionaryWriter writer = JsonReaderWriterFactory.CreateJsonWriter(json, Encoding.UTF8, false, true))
+			{
+				serializer.WriteObject(writer, payload);
+				writer.Flush();
+			}
 			var buffer = json.GetBuffer();
 			try
 			{
