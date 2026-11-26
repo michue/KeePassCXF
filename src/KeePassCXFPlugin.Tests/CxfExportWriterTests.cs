@@ -32,10 +32,12 @@ public class CxfExportWriterTests
 		var entry = NewPasskeyEntry(der);
 		entry.Strings.Set(PwDefs.NotesField, new ProtectedString(false, "Passkey notes"));
 		entry.Strings.Set(PwDefs.UrlField, new ProtectedString(false, "https://example.com/login"));
+		entry.Strings.Set(PwDefs.PasswordField, new ProtectedString(true, "standard-password"));
 		entry.AddTag("work");
 		entry.AddTag("security");
 		var secondEntry = NewPasskeyEntry(der);
 		secondEntry.Strings.Set(PwDefs.TitleField, new ProtectedString(false, "Second passkey"));
+		secondEntry.Strings.Set(PwDefs.UserNameField, new ProtectedString(false, string.Empty));
 		database.RootGroup.AddEntry(entry, true);
 		database.RootGroup.AddEntry(secondEntry, true);
 		using var output = new MemoryStream();
@@ -55,6 +57,11 @@ public class CxfExportWriterTests
 		Assert.Contains("\"subtitle\": \"Passkey notes\"", json);
 		Assert.Contains("\"scope\":{\"urls\":[\"https:\\/\\/example.com\\/login\"],\"androidApps\":[]}", compactJson);
 		Assert.Contains("\"tags\":[\"security\",\"work\"]", compactJson);
+		Assert.Contains("\"type\":\"basic-auth\",\"username\":{\"fieldType\":\"string\",\"value\":\"account-user\"", compactJson);
+		Assert.Contains("\"password\":{\"fieldType\":\"concealed-string\",\"value\":\"standard-password\"", compactJson);
+		Assert.Contains("\"label\": \"" + KeePass.Resources.KPRes.UserName + "\"", json);
+		Assert.Contains("\"label\": \"" + KeePass.Resources.KPRes.Password + "\"", json);
+		Assert.Single(Regex.Matches(compactJson, "\\\"type\\\":\\\"basic-auth\\\"").Cast<Match>());
 		Assert.Single(Regex.Matches(compactJson, "\\\"subtitle\\\":").Cast<Match>());
 		Assert.Single(Regex.Matches(compactJson, "\\\"scope\\\":").Cast<Match>());
 		Assert.Single(Regex.Matches(compactJson, "\\\"tags\\\":").Cast<Match>());
@@ -107,7 +114,31 @@ public class CxfExportWriterTests
 	}
 
 	[Fact]
-	public void Export_SkipsEntriesWithoutPasskeys()
+	public void Export_BasicAuthOnlyEntryDoesNotRequirePasskeyData()
+	{
+		var database = NewDatabase();
+		var entry = new PwEntry(true, true);
+		entry.Strings.Set(PwDefs.TitleField, new ProtectedString(false, "Basic login"));
+		entry.Strings.Set(PwDefs.UserNameField, new ProtectedString(false, "basic-user"));
+		entry.Strings.Set(PwDefs.PasswordField, new ProtectedString(true, "basic-password"));
+		database.RootGroup.AddEntry(entry, true);
+		using var output = new MemoryStream();
+
+		bool exported = CxfExportWriter.Export(new PwExportInfo(database.RootGroup, database), output, new TestStatusLogger());
+
+		Assert.True(exported);
+		string compactJson = Regex.Replace(Encoding.UTF8.GetString(output.ToArray()), @"\s+", string.Empty);
+		Assert.Contains("\"id\":\"" + EncodeBase64Url(entry.Uuid.UuidBytes) + "\"", compactJson);
+		Assert.Contains("\"type\":\"basic-auth\",\"username\":{\"fieldType\":\"string\",\"value\":\"basic-user\"", compactJson);
+		Assert.Contains("\"password\":{\"fieldType\":\"concealed-string\",\"value\":\"basic-password\"", compactJson);
+		string json = Encoding.UTF8.GetString(output.ToArray());
+		Assert.Contains("\"label\": \"" + KeePass.Resources.KPRes.UserName + "\"", json);
+		Assert.Contains("\"label\": \"" + KeePass.Resources.KPRes.Password + "\"", json);
+		Assert.DoesNotContain("\"type\":\"passkey\"", compactJson);
+	}
+
+	[Fact]
+	public void Export_SkipsEntriesWithoutPasskeysOrBasicAuth()
 	{
 		var database = NewDatabase();
 		database.RootGroup.AddEntry(new PwEntry(true, true), true);

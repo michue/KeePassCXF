@@ -23,6 +23,7 @@ public class CxfImportReaderTests
 	private const string CollectionId = "EBESExQVFhcYGRobHB0eHw";
 	private const string Prefix = "{\"version\":{\"major\":1,\"minor\":0},\"exporterRpId\":\"exporter.example.com\",\"exporterDisplayName\":\"Exporter\",\"timestamp\":1705228800,\"accounts\":[{\"id\":\"YWNjb3VudA\",\"username\":\"account-user\",\"email\":\"user@example.com\",\"collections\":[],\"items\":[{\"id\":\"" + ItemId + "\",\"creationAt\":1705142400,\"modifiedAt\":1705228800,\"title\":\"Example passkey\",\"credentials\":[";
 	private const string Passkey = "{\"type\":\"passkey\",\"credentialId\":\"Y3JlZGVudGlhbElk\",\"rpId\":\"example.com\",\"username\":\"passkey-user\",\"userDisplayName\":\"Display Name\",\"userHandle\":\"dXNlci1oYW5kbGU\",\"key\":\"" + PrivateKey + "\"}";
+	private const string BasicAuth = "{\"type\":\"basic-auth\",\"username\":{\"id\":\"dXNlcm5hbWU\",\"fieldType\":\"string\",\"value\":\"login-user\",\"label\":\"Login name\"},\"password\":{\"id\":\"cGFzc3dvcmQ\",\"fieldType\":\"concealed-string\",\"value\":\"login-password\",\"label\":\"Secret\"}}";
 	private const string Suffix = "]}]}]}";
 
 	[Fact]
@@ -40,7 +41,7 @@ public class CxfImportReaderTests
 			Assert.Equal("Example passkey", entry.Strings.ReadSafe(PwDefs.TitleField));
 			Assert.Equal(string.Empty, entry.Strings.ReadSafe(PwDefs.NotesField));
 			Assert.Equal(string.Empty, entry.Strings.ReadSafe(PwDefs.UrlField));
-			Assert.Equal("account-user", entry.Strings.ReadSafe(PwDefs.UserNameField));
+			Assert.Equal(string.Empty, entry.Strings.ReadSafe(PwDefs.UserNameField));
 			Assert.Equal("Y3JlZGVudGlhbElk", entry.Strings.ReadSafe("KPEX_PASSKEY_CREDENTIAL_ID"));
 			Assert.Equal("example.com", entry.Strings.ReadSafe("KPEX_PASSKEY_RELYING_PARTY"));
 			Assert.Equal("passkey-user", entry.Strings.ReadSafe("KPEX_PASSKEY_USERNAME"));
@@ -52,6 +53,107 @@ public class CxfImportReaderTests
 			Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1705142400).UtcDateTime, entry.CreationTime);
 			Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1705228800).UtcDateTime, entry.LastModificationTime);
 		}
+	}
+
+	[Fact]
+	public void Import_MapsBasicAuthCredentialsToPasskeyEntry()
+	{
+		var database = NewDatabase();
+		using (var input = JsonStream(Prefix + BasicAuth + "," + Passkey + Suffix))
+			new CxfFileFormatProvider().Import(database, input, new TestStatusLogger());
+
+		var entry = database.RootGroup.GetEntries(true).GetAt(0);
+		Assert.Equal("login-user", entry.Strings.ReadSafe(PwDefs.UserNameField));
+		Assert.Equal("login-password", entry.Strings.ReadSafe(PwDefs.PasswordField));
+		Assert.True(entry.Strings.GetSafe(PwDefs.PasswordField).IsProtected);
+		Assert.Equal("passkey-user", entry.Strings.ReadSafe("KPEX_PASSKEY_USERNAME"));
+	}
+
+	[Fact]
+	public void Import_RejectsInvalidEditableFieldId()
+	{
+		string invalidId = Prefix + BasicAuth.Replace("dXNlcm5hbWU", "not-base64!") + Suffix;
+		var database = NewDatabase();
+		using (var input = JsonStream(invalidId))
+			Assert.Throws<InvalidDataException>(() => new CxfFileFormatProvider().Import(database, input, new TestStatusLogger()));
+	}
+
+	[Fact]
+	public void Import_DoesNotFallbackToAccountUsernameWhenBasicAuthUsernameIsMissing()
+	{
+		const string basicAuthWithoutUsername = "{\"type\":\"basic-auth\",\"password\":{\"fieldType\":\"concealed-string\",\"value\":\"login-password\"}}";
+		var database = NewDatabase();
+		using (var input = JsonStream(Prefix + basicAuthWithoutUsername + Suffix))
+			new CxfFileFormatProvider().Import(database, input, new TestStatusLogger());
+
+		var entry = database.RootGroup.GetEntries(true).GetAt(0);
+		Assert.Equal(string.Empty, entry.Strings.ReadSafe(PwDefs.UserNameField));
+		Assert.Equal("login-password", entry.Strings.ReadSafe(PwDefs.PasswordField));
+	}
+
+	[Fact]
+	public void Import_ImportsAllBasicAuthCredentialsAndWarnsForAdditionalCredentials()
+	{
+		var database = NewDatabase();
+		var logger = new TestStatusLogger();
+		const string secondBasicAuth = "{\"type\":\"basic-auth\",\"username\":{\"fieldType\":\"string\",\"value\":\"second-user\"},\"password\":{\"fieldType\":\"concealed-string\",\"value\":\"second-password\"}}";
+		using (var input = JsonStream(Prefix + BasicAuth + "," + secondBasicAuth + Suffix))
+			new CxfFileFormatProvider().Import(database, input, logger);
+
+		var entries = database.RootGroup.GetEntries(true);
+		Assert.Equal((uint)2, entries.UCount);
+		Assert.Equal("login-user", entries.GetAt(0).Strings.ReadSafe(PwDefs.UserNameField));
+		Assert.Equal("login-password", entries.GetAt(0).Strings.ReadSafe(PwDefs.PasswordField));
+		Assert.Equal("second-user", entries.GetAt(1).Strings.ReadSafe(PwDefs.UserNameField));
+		Assert.Equal("second-password", entries.GetAt(1).Strings.ReadSafe(PwDefs.PasswordField));
+		Assert.Single(logger.Warnings);
+		Assert.Contains("multiple basic-auth credentials", logger.Warnings[0]);
+		Assert.Contains("all will be imported", logger.Warnings[0]);
+	}
+
+	[Fact]
+	public void Import_CombinesFirstBasicAuthAndPasskeyAndImportsAdditionalCredentialsSeparately()
+	{
+		var database = NewDatabase();
+		var logger = new TestStatusLogger();
+		const string secondPasskey = "{\"type\":\"passkey\",\"credentialId\":\"c2Vjb25kLWNyZWRlbnRpYWw\",\"rpId\":\"example.com\",\"username\":\"second-passkey-user\",\"userDisplayName\":\"Second Display Name\",\"userHandle\":\"dXNlci1oYW5kbGU\",\"key\":\"" + PrivateKey + "\"}";
+		const string secondBasicAuth = "{\"type\":\"basic-auth\",\"username\":{\"fieldType\":\"string\",\"value\":\"second-user\"},\"password\":{\"fieldType\":\"concealed-string\",\"value\":\"second-password\"}}";
+		using (var input = JsonStream(Prefix + BasicAuth + "," + secondBasicAuth + "," + Passkey + "," + secondPasskey + Suffix))
+			new CxfFileFormatProvider().Import(database, input, logger);
+
+		var entries = database.RootGroup.GetEntries(true);
+		Assert.Equal((uint)3, entries.UCount);
+		Assert.Equal("login-user", entries.GetAt(0).Strings.ReadSafe(PwDefs.UserNameField));
+		Assert.Equal("login-password", entries.GetAt(0).Strings.ReadSafe(PwDefs.PasswordField));
+		Assert.True(entries.GetAt(0).Strings.GetSafe(PwDefs.PasswordField).IsProtected);
+		Assert.Equal("Y3JlZGVudGlhbElk", entries.GetAt(0).Strings.ReadSafe("KPEX_PASSKEY_CREDENTIAL_ID"));
+		Assert.Equal("second-user", entries.GetAt(1).Strings.ReadSafe(PwDefs.UserNameField));
+		Assert.Equal("second-password", entries.GetAt(1).Strings.ReadSafe(PwDefs.PasswordField));
+		Assert.Equal(string.Empty, entries.GetAt(1).Strings.ReadSafe("KPEX_PASSKEY_CREDENTIAL_ID"));
+		Assert.Equal(string.Empty, entries.GetAt(2).Strings.ReadSafe(PwDefs.UserNameField));
+		Assert.Equal("c2Vjb25kLWNyZWRlbnRpYWw", entries.GetAt(2).Strings.ReadSafe("KPEX_PASSKEY_CREDENTIAL_ID"));
+		Assert.Equal("second-passkey-user", entries.GetAt(2).Strings.ReadSafe("KPEX_PASSKEY_USERNAME"));
+		Assert.Equal(2, logger.Warnings.Count);
+		Assert.Contains("multiple passkey credentials", logger.Warnings[0]);
+		Assert.Contains("separate entry", logger.Warnings[0]);
+		Assert.Contains("multiple basic-auth credentials", logger.Warnings[1]);
+		Assert.Contains("all will be imported", logger.Warnings[1]);
+	}
+
+	[Fact]
+	public void Import_BasicAuthOnlyCreatesKeePassEntry()
+	{
+		var database = NewDatabase();
+		using (var input = JsonStream(Prefix + BasicAuth + Suffix))
+			new CxfFileFormatProvider().Import(database, input, new TestStatusLogger());
+
+		var entries = database.RootGroup.GetEntries(true);
+		Assert.Equal((uint)1, entries.UCount);
+		var entry = entries.GetAt(0);
+		Assert.Equal("Example passkey", entry.Strings.ReadSafe(PwDefs.TitleField));
+		Assert.Equal("login-user", entry.Strings.ReadSafe(PwDefs.UserNameField));
+		Assert.Equal("login-password", entry.Strings.ReadSafe(PwDefs.PasswordField));
+		Assert.True(entry.Strings.GetSafe(PwDefs.PasswordField).IsProtected);
 	}
 
 	[Fact]

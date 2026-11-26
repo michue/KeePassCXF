@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.Serialization;
 using System.Text;
 using System.Web.Script.Serialization;
@@ -54,24 +55,70 @@ internal static class CxfImportReader
 			foreach (var account in document.Accounts)
 			{
 				if (account?.Items == null) continue;
-				string accountUsername = !string.IsNullOrEmpty(account.Username) ? account.Username : account.Email ?? string.Empty;
 
 				foreach (var item in account.Items)
 				{
-					if (item?.Credentials == null) continue;
+					if (item == null) continue;
+					var passkeys = (item.Credentials ?? Array.Empty<object>())
+						.OfType<CxfExportWriter.CxfPasskey>().ToArray();
+					var basicAuths = (item.Credentials ?? Array.Empty<object>())
+						.OfType<CxfExportWriter.CxfBasicAuth>().ToArray();
+					if (passkeys.Length > 1)
+						statusLogger.SetText($"Item '{item.Title ?? string.Empty}' contains multiple passkey credentials; each will be imported as a separate entry.", LogStatusType.Warning);
+					if (basicAuths.Length > 1)
+						statusLogger.SetText($"Item '{item.Title ?? string.Empty}' contains multiple basic-auth credentials; all will be imported.", LogStatusType.Warning);
 					if (item.Scope?.Urls != null && item.Scope.Urls.Length > 1)
-						statusLogger.SetText($"Passkey '{item.Title ?? string.Empty}' specifies multiple scope URLs; only the first URL will be imported.", LogStatusType.Warning);
-					foreach (var credential in item.Credentials)
+						statusLogger.SetText($"Item '{item.Title ?? string.Empty}' specifies multiple scope URLs; only the first URL will be imported.", LogStatusType.Warning);
+					if (passkeys.Length == 0 && basicAuths.Length == 0) continue;
+
+					var entry = CreateItemEntry(item, true);
+					if (basicAuths.Length > 0)
 					{
 						if (!statusLogger.ContinueWork()) return;
-						if (credential == null || !string.Equals(credential.Type, "passkey", StringComparison.Ordinal)) continue;
-
+						AddBasicAuth(entry, basicAuths[0]);
+						credentialsRead++;
+					}
+					if (passkeys.Length > 0)
+					{
+						if (!statusLogger.ContinueWork()) return;
 						statusLogger.SetText($"Validating passkey '{item.Title ?? string.Empty}'...", LogStatusType.Info);
+						AddPasskey(entry, passkeys[0]);
+						credentialsRead++;
+					}
+					importedEntries.Add(new ImportedEntry
+					{
+						Account = account,
+						ItemId = item.Id,
+						Entry = entry,
+						TargetGroup = database.RootGroup,
+					});
+
+					for (int i = 1; i < basicAuths.Length; i++)
+					{
+						if (!statusLogger.ContinueWork()) return;
+						var additionalEntry = CreateItemEntry(item, false);
+						AddBasicAuth(additionalEntry, basicAuths[i]);
 						importedEntries.Add(new ImportedEntry
 						{
 							Account = account,
 							ItemId = item.Id,
-							Entry = CreateEntry(accountUsername, item, credential),
+							Entry = additionalEntry,
+							TargetGroup = database.RootGroup,
+						});
+						credentialsRead++;
+					}
+
+					for (int i = 1; i < passkeys.Length; i++)
+					{
+						if (!statusLogger.ContinueWork()) return;
+						statusLogger.SetText($"Validating passkey '{item.Title ?? string.Empty}'...", LogStatusType.Info);
+						var additionalEntry = CreateItemEntry(item, false);
+						AddPasskey(additionalEntry, passkeys[i]);
+						importedEntries.Add(new ImportedEntry
+						{
+							Account = account,
+							ItemId = item.Id,
+							Entry = additionalEntry,
 							TargetGroup = database.RootGroup,
 						});
 						credentialsRead++;
@@ -97,7 +144,7 @@ internal static class CxfImportReader
 
 		if (!statusLogger.ContinueWork()) return;
 
-		statusLogger.SetText($"Importing {credentialsRead} passkey(s)...", LogStatusType.Info);
+		statusLogger.SetText($"Importing {credentialsRead} credential(s)...", LogStatusType.Info);
 		var existingGroups = GetGroupsByUuid(database.RootGroup);
 		var createdGroups = new List<GroupAddition>();
 		var warnedGroupIds = new HashSet<string>(StringComparer.Ordinal);
@@ -125,7 +172,7 @@ internal static class CxfImportReader
 			if (!statusLogger.ContinueWork()) return;
 			importedEntry.TargetGroup.AddEntry(importedEntry.Entry, true);
 		}
-		statusLogger.SetText($"Imported {credentialsRead} passkey(s).", LogStatusType.Info);
+		statusLogger.SetText($"Imported {credentialsRead} credential(s).", LogStatusType.Info);
 	}
 
 	private static CxfExportWriter.CxfHeader ParseDocument(Dictionary<string, object> root)
@@ -152,27 +199,38 @@ internal static class CxfImportReader
 				var item = AsObject(itemValue, "item");
 				var credentialValues = GetValue(item, "credentials");
 				var credentialArray = credentialValues == null ? Array.Empty<object>() : AsArray(credentialValues, "credentials");
-				var credentials = new List<CxfExportWriter.CxfPasskey>();
+				var credentials = new List<CxfExportWriter.CxfCredential>();
 				foreach (var credentialValue in credentialArray)
 				{
 					var credential = AsObject(credentialValue, "credential");
 					var type = GetString(credential, "type");
-					if (!string.Equals(type, "passkey", StringComparison.Ordinal))
+					if (string.Equals(type, "basic-auth", StringComparison.Ordinal))
 					{
-						credentials.Add(new CxfExportWriter.CxfPasskey { Type = type });
+						credentials.Add(new CxfExportWriter.CxfBasicAuth
+						{
+							Type = type,
+							Username = ParseEditableField(GetValue(credential, "username"), "username", "string"),
+							Password = ParseEditableField(GetValue(credential, "password"), "password", "concealed-string"),
+						});
 						continue;
 					}
 
-					credentials.Add(new CxfExportWriter.CxfPasskey
+					if (string.Equals(type, "passkey", StringComparison.Ordinal))
 					{
-						Type = type,
-						CredentialId = GetString(credential, "credentialId"),
-						RpId = GetString(credential, "rpId"),
-						Username = GetString(credential, "username"),
-						UserDisplayName = GetString(credential, "userDisplayName"),
-						UserHandle = GetString(credential, "userHandle"),
-						Key = GetString(credential, "key"),
-					});
+						credentials.Add(new CxfExportWriter.CxfPasskey
+						{
+							Type = type,
+							CredentialId = GetString(credential, "credentialId"),
+							RpId = GetString(credential, "rpId"),
+							Username = GetString(credential, "username"),
+							UserDisplayName = GetString(credential, "userDisplayName"),
+							UserHandle = GetString(credential, "userHandle"),
+							Key = GetString(credential, "key"),
+						});
+						continue;
+					}
+
+					// Credential type not yet implemented; ignore it.
 				}
 
 				parsedItems.Add(new CxfExportWriter.CxfItem
@@ -209,6 +267,24 @@ internal static class CxfImportReader
 			ExporterDisplayName = GetString(root, "exporterDisplayName"),
 			Timestamp = GetInt64(root, "timestamp"),
 			Accounts = parsedAccounts.ToArray(),
+		};
+	}
+
+	private static CxfExportWriter.CxfEditableField ParseEditableField(object value, string name, string expectedFieldType)
+	{
+		if (value == null) return null;
+		var field = AsObject(value, $"editable field '{name}'");
+		string fieldType = GetRequiredString(field, "fieldType");
+		if (!string.Equals(fieldType, expectedFieldType, StringComparison.Ordinal))
+			throw new SerializationException($"The CXF editable field '{name}' fieldType must be '{expectedFieldType}'.");
+		string id = GetString(field, "id");
+		if (id != null) ValidateBase64Url(id, $"editable field '{name}' ID");
+		return new CxfExportWriter.CxfEditableField
+		{
+			Id = id,
+			FieldType = fieldType,
+			Value = GetRequiredString(field, "value"),
+			Label = GetString(field, "label"),
 		};
 	}
 
@@ -349,13 +425,49 @@ internal static class CxfImportReader
 			throw new SerializationException("The CXF document has no accounts array.");
 	}
 
-	private static PwEntry CreateEntry(string accountUsername, CxfExportWriter.CxfItem item,
-		CxfExportWriter.CxfPasskey credential)
+	private static PwEntry CreateItemEntry(CxfExportWriter.CxfItem item, bool useItemUuid)
 	{
 		if (string.IsNullOrWhiteSpace(item.Id))
-			throw new InvalidDataException("A CXF passkey item has no ID.");
+			throw new InvalidDataException("A CXF item has no ID.");
 		if (item.Title == null)
-			throw new InvalidDataException("A CXF passkey item has no title.");
+			throw new InvalidDataException("A CXF item has no title.");
+
+		var entry = new PwEntry(true, true);
+		if (useItemUuid && TryGetItemUuid(item.Id, out var itemUuid))
+			entry.Uuid = itemUuid;
+		entry.Strings.Set(PwDefs.TitleField, new ProtectedString(false, item.Title));
+		entry.Strings.Set(PwDefs.NotesField, new ProtectedString(false, item.Subtitle ?? string.Empty));
+		entry.Strings.Set(PwDefs.UrlField, new ProtectedString(false,
+			item.Scope?.Urls != null && item.Scope.Urls.Length > 0 ? item.Scope.Urls[0] : string.Empty));
+		entry.Strings.Set(PwDefs.UserNameField, new ProtectedString(false, string.Empty));
+		entry.Strings.Set(PwDefs.PasswordField, ProtectedString.EmptyEx);
+		foreach (string tag in item.Tags)
+			entry.AddTag(tag);
+		if (item.CreationAt.HasValue)
+		{
+			if (item.CreationAt.Value < 0) throw new InvalidDataException("The CXF item creation time is invalid.");
+			entry.CreationTime = DateTimeOffset.FromUnixTimeSeconds(item.CreationAt.Value).UtcDateTime;
+		}
+		if (item.ModifiedAt.HasValue)
+		{
+			if (item.ModifiedAt.Value < 0) throw new InvalidDataException("The CXF item modification time is invalid.");
+			entry.LastModificationTime = DateTimeOffset.FromUnixTimeSeconds(item.ModifiedAt.Value).UtcDateTime;
+		}
+		return entry;
+	}
+
+	private static void AddBasicAuth(PwEntry entry, CxfExportWriter.CxfBasicAuth basicAuth)
+	{
+		entry.Strings.Set(PwDefs.UserNameField, new ProtectedString(false,
+			basicAuth.Username?.Value ?? string.Empty));
+		string password = basicAuth.Password?.Value;
+		entry.Strings.Set(PwDefs.PasswordField, string.IsNullOrEmpty(password)
+			? ProtectedString.EmptyEx
+			: new ProtectedString(true, password));
+	}
+
+	private static void AddPasskey(PwEntry entry, CxfExportWriter.CxfPasskey credential)
+	{
 		if (string.IsNullOrWhiteSpace(credential.CredentialId))
 			throw new InvalidDataException("A CXF passkey has no credential ID.");
 		if (string.IsNullOrWhiteSpace(credential.RpId))
@@ -370,35 +482,12 @@ internal static class CxfImportReader
 		try
 		{
 			ValidatePkcs8PrivateKey(privateKey);
-			var entry = new PwEntry(true, true);
-			if (TryGetItemUuid(item.Id, out var itemUuid))
-				entry.Uuid = itemUuid;
-			entry.Strings.Set(PwDefs.TitleField, new ProtectedString(false, item.Title ?? string.Empty));
-			entry.Strings.Set(PwDefs.NotesField, new ProtectedString(false, item.Subtitle ?? string.Empty));
-			entry.Strings.Set(PwDefs.UrlField, new ProtectedString(false,
-				item.Scope?.Urls != null && item.Scope.Urls.Length > 0 ? item.Scope.Urls[0] : string.Empty));
-			foreach (string tag in item.Tags)
-				entry.AddTag(tag);
-			entry.Strings.Set(PwDefs.UserNameField, new ProtectedString(false, accountUsername));
-			entry.Strings.Set(PwDefs.PasswordField, ProtectedString.EmptyEx);
 			entry.Strings.Set(FieldCredentialId, new ProtectedString(true, credential.CredentialId));
 			entry.Strings.Set(FieldPrivateKey, new ProtectedString(true, EncodePkcs8Pem(privateKey)));
 			entry.Strings.Set(FieldRelyingParty, new ProtectedString(false, credential.RpId));
 			entry.Strings.Set(FieldUserHandle, new ProtectedString(true, credential.UserHandle));
 			entry.Strings.Set(FieldUsername, new ProtectedString(false, credential.Username));
 			entry.IconId = PwIcon.MultiKeys;
-
-			if (item.CreationAt.HasValue)
-			{
-				if (item.CreationAt.Value < 0) throw new InvalidDataException("The CXF item creation time is invalid.");
-				entry.CreationTime = DateTimeOffset.FromUnixTimeSeconds(item.CreationAt.Value).UtcDateTime;
-			}
-			if (item.ModifiedAt.HasValue)
-			{
-				if (item.ModifiedAt.Value < 0) throw new InvalidDataException("The CXF item modification time is invalid.");
-				entry.LastModificationTime = DateTimeOffset.FromUnixTimeSeconds(item.ModifiedAt.Value).UtcDateTime;
-			}
-			return entry;
 		}
 		finally
 		{
@@ -522,25 +611,25 @@ internal static class CxfImportReader
 	private static byte[] DecodeBase64Url(string value, string description)
 	{
 		if (string.IsNullOrEmpty(value))
-			throw new InvalidDataException($"The CXF passkey {description} is empty.");
+			throw new InvalidDataException($"The CXF {description} is empty.");
 
 		int paddingStart = value.IndexOf('=');
 		int dataLength = paddingStart < 0 ? value.Length : paddingStart;
 		int paddingLength = value.Length - dataLength;
 		if (paddingLength > 2)
-			throw new InvalidDataException($"The CXF passkey {description} is not valid base64url.");
+			throw new InvalidDataException($"The CXF {description} is not valid base64url.");
 		if (paddingStart >= 0)
 			for (int i = paddingStart; i < value.Length; i++)
 				if (value[i] != '=')
-					throw new InvalidDataException($"The CXF passkey {description} is not valid base64url.");
+					throw new InvalidDataException($"The CXF {description} is not valid base64url.");
 		for (int i = 0; i < dataLength; i++)
 		{
 			char c = value[i];
 			if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_'))
-				throw new InvalidDataException($"The CXF passkey {description} is not valid base64url.");
+				throw new InvalidDataException($"The CXF {description} is not valid base64url.");
 		}
 		if (dataLength % 4 == 1 || (paddingLength != 0 && value.Length % 4 != 0))
-			throw new InvalidDataException($"The CXF passkey {description} is not valid base64url.");
+			throw new InvalidDataException($"The CXF {description} is not valid base64url.");
 
 		string base64 = value.Substring(0, dataLength).Replace('-', '+').Replace('_', '/')
 			+ new string('=', (4 - dataLength % 4) % 4);
@@ -550,7 +639,7 @@ internal static class CxfImportReader
 		}
 		catch (FormatException ex)
 		{
-			throw new InvalidDataException($"The CXF passkey {description} is not valid base64url.", ex);
+			throw new InvalidDataException($"The CXF {description} is not valid base64url.", ex);
 		}
 	}
 
