@@ -18,7 +18,7 @@ A KeePass plugin for importing and exporting credentials using the FIDO Alliance
 
 ## How to use
 
-The plugin integrates with KeePass's built-in Import and Export dialogs and shows up in the group *Password Managers*. There you can simply select *Client Exchange Format (CXF)* as the file type.
+The plugin integrates with KeePass's built-in Import and Export dialogs and shows up in the group *General*. There you can simply select *Client Exchange Format (CXF)* as the file type.
 
 ## Installation
 
