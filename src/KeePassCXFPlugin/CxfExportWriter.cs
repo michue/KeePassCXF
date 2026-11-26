@@ -27,8 +27,16 @@ internal static class CxfExportWriter
 
 	internal static bool Export(PwExportInfo exportInfo, Stream output, IStatusLogger statusLogger)
 	{
+		var database = exportInfo.ContextDatabase;
+		string databaseFileName = database == null ? null : Path.GetFileName(database.IOConnectionInfo.Path);
+		if (database == null || string.IsNullOrEmpty(databaseFileName))
+		{
+			statusLogger.SetText("The KeePass database context or file name is unavailable.", LogStatusType.Error);
+			return false;
+		}
+
 		statusLogger.SetText("Collecting passkeys for CXF export...", LogStatusType.Info);
-		var accounts = new List<CxfAccount>();
+		var items = new List<CxfItem>();
 		var entries = exportInfo.DataGroup.GetEntries(true);
 		for (int i = 0; i < entries.UCount; i++)
 		{
@@ -37,24 +45,32 @@ internal static class CxfExportWriter
 			var entry = entries.GetAt((uint)i);
 			if (!HasPasskey(entry)) continue;
 
-			if (!TryCreateAccount(entry, out var account, out var error))
+			if (!TryCreateItem(entry, out var item, out var error))
 			{
 				statusLogger.SetText(error, LogStatusType.Error);
 				return false;
 			}
-			accounts.Add(account);
+			items.Add(item);
 		}
 
+		var account = new CxfAccount
+		{
+			Id = ToBase64Url(database.RootGroup.Uuid.UuidBytes),
+			Username = databaseFileName,
+			Email = string.Empty,
+			Collections = Array.Empty<CxfCollection>(),
+			Items = items.ToArray(),
+		};
 		var payload = new CxfHeader
 		{
 			Version = new CxfVersion { Major = 1, Minor = 0 },
 			ExporterRpId = ExporterRpId,
 			ExporterDisplayName = ExporterDisplayName,
 			Timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-			Accounts = accounts.ToArray(),
+			Accounts = new[] { account },
 		};
 
-		statusLogger.SetText($"Writing {accounts.Count} passkey(s) in CXF format...", LogStatusType.Info);
+		statusLogger.SetText($"Writing {items.Count} passkey(s) in CXF format...", LogStatusType.Info);
 		var serializer = new DataContractJsonSerializer(typeof(CxfHeader));
 		using (var json = new MemoryStream())
 		{
@@ -74,7 +90,7 @@ internal static class CxfExportWriter
 			}
 		}
 
-		statusLogger.SetText($"Exported {accounts.Count} passkey(s).", LogStatusType.Info);
+		statusLogger.SetText($"Exported {items.Count} passkey(s).", LogStatusType.Info);
 		return true;
 	}
 
@@ -82,9 +98,9 @@ internal static class CxfExportWriter
 		entry.Strings.Exists(FieldCredentialId)
 		&& !string.IsNullOrEmpty(entry.Strings.ReadSafe(FieldCredentialId));
 
-	private static bool TryCreateAccount(PwEntry entry, out CxfAccount account, out string error)
+	private static bool TryCreateItem(PwEntry entry, out CxfItem item, out string error)
 	{
-		account = null;
+		item = null;
 		error = null;
 		var credentialId = entry.Strings.ReadSafe(FieldCredentialId);
 		var relyingParty = entry.Strings.ReadSafe(FieldRelyingParty);
@@ -117,21 +133,13 @@ internal static class CxfExportWriter
 				UserHandle = entry.Strings.ReadSafe(FieldUserHandle),
 				Key = ToBase64Url(der),
 			};
-			var item = new CxfItem
+			item = new CxfItem
 			{
-				Id = credentialId,
+				Id = ToBase64Url(entry.Uuid.UuidBytes),
 				CreationAt = ToUnixTimeSeconds(entry.CreationTime),
 				ModifiedAt = ToUnixTimeSeconds(entry.LastModificationTime),
 				Title = entry.Strings.ReadSafe(PwDefs.TitleField),
 				Credentials = new[] { passkey },
-			};
-			account = new CxfAccount
-			{
-				Id = ToBase64Url(entry.Uuid.UuidBytes),
-				Username = entry.Strings.ReadSafe(PwDefs.UserNameField),
-				Email = string.Empty,
-				Collections = Array.Empty<CxfCollection>(),
-				Items = new[] { item },
 			};
 			return true;
 		}

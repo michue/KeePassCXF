@@ -227,6 +227,8 @@ internal static class CxfImportReader
 	private static PwEntry CreateEntry(string accountUsername, CxfExportWriter.CxfItem item,
 		CxfExportWriter.CxfPasskey credential)
 	{
+		if (string.IsNullOrWhiteSpace(item.Id))
+			throw new InvalidDataException("A CXF passkey item has no ID.");
 		if (item.Title == null)
 			throw new InvalidDataException("A CXF passkey item has no title.");
 		if (string.IsNullOrWhiteSpace(credential.CredentialId))
@@ -244,6 +246,8 @@ internal static class CxfImportReader
 		{
 			ValidatePkcs8PrivateKey(privateKey);
 			var entry = new PwEntry(true, true);
+			if (TryGetItemUuid(item.Id, out var itemUuid))
+				entry.Uuid = itemUuid;
 			entry.Strings.Set(PwDefs.TitleField, new ProtectedString(false, item.Title ?? string.Empty));
 			entry.Strings.Set(PwDefs.UserNameField, new ProtectedString(false, accountUsername));
 			entry.Strings.Set(PwDefs.PasswordField, ProtectedString.EmptyEx);
@@ -269,6 +273,31 @@ internal static class CxfImportReader
 		finally
 		{
 			MemUtil.ZeroByteArray(privateKey);
+		}
+	}
+
+	private static bool TryGetItemUuid(string value, out PwUuid uuid)
+	{
+		uuid = null;
+		if (string.IsNullOrEmpty(value)) return false;
+
+		byte[] bytes = null;
+		try
+		{
+			bytes = DecodeBase64Url(value, "item ID");
+			if (bytes.Length != 16) return false;
+			var parsedUuid = new PwUuid(bytes);
+			if (parsedUuid.IsZero) return false;
+			uuid = parsedUuid;
+			return true;
+		}
+		catch (InvalidDataException)
+		{
+			return false;
+		}
+		finally
+		{
+			if (bytes != null) MemUtil.ZeroByteArray(bytes);
 		}
 	}
 

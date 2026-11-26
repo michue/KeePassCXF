@@ -18,7 +18,8 @@ namespace KeePassCXFPlugin.Tests;
 public class CxfImportReaderTests
 {
 	private const string PrivateKey = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgARu_0sCt20EpgVxb4Puq3Ga5VVLpuTY75ngvZlyq3X6hRANCAASmdk1xLsK0oOlhxIPp0d1ZuS0sT9nf6BZtSelhqvLBW0fOL33l_bXgsr_STUHjCLn8l6gcRJwe7OQvbQubZ1dY";
-	private const string Prefix = "{\"version\":{\"major\":1,\"minor\":0},\"exporterRpId\":\"exporter.example.com\",\"exporterDisplayName\":\"Exporter\",\"timestamp\":1705228800,\"accounts\":[{\"id\":\"YWNjb3VudA\",\"username\":\"account-user\",\"email\":\"user@example.com\",\"items\":[{\"id\":\"aXRlbQ\",\"creationAt\":1705142400,\"modifiedAt\":1705228800,\"title\":\"Example passkey\",\"credentials\":[";
+	private const string ItemId = "AAECAwQFBgcICQoLDA0ODw";
+	private const string Prefix = "{\"version\":{\"major\":1,\"minor\":0},\"exporterRpId\":\"exporter.example.com\",\"exporterDisplayName\":\"Exporter\",\"timestamp\":1705228800,\"accounts\":[{\"id\":\"YWNjb3VudA\",\"username\":\"account-user\",\"email\":\"user@example.com\",\"items\":[{\"id\":\"" + ItemId + "\",\"creationAt\":1705142400,\"modifiedAt\":1705228800,\"title\":\"Example passkey\",\"credentials\":[";
 	private const string Passkey = "{\"type\":\"passkey\",\"credentialId\":\"Y3JlZGVudGlhbElk\",\"rpId\":\"example.com\",\"username\":\"passkey-user\",\"userDisplayName\":\"Display Name\",\"userHandle\":\"dXNlci1oYW5kbGU\",\"key\":\"" + PrivateKey + "\"}";
 	private const string Suffix = "]}]}]}";
 
@@ -33,6 +34,7 @@ public class CxfImportReaderTests
 			var entries = database.RootGroup.GetEntries(true);
 			Assert.Equal((uint)1, entries.UCount);
 			var entry = entries.GetAt(0);
+			Assert.Equal(new byte[] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 }, entry.Uuid.UuidBytes);
 			Assert.Equal("Example passkey", entry.Strings.ReadSafe(PwDefs.TitleField));
 			Assert.Equal("account-user", entry.Strings.ReadSafe(PwDefs.UserNameField));
 			Assert.Equal("Y3JlZGVudGlhbElk", entry.Strings.ReadSafe("KPEX_PASSKEY_CREDENTIAL_ID"));
@@ -44,6 +46,27 @@ public class CxfImportReaderTests
 			Assert.Contains("-----BEGIN PRIVATE KEY-----", entry.Strings.ReadSafe("KPEX_PASSKEY_PRIVATE_KEY_PEM"));
 			Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1705142400).UtcDateTime, entry.CreationTime);
 			Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1705228800).UtcDateTime, entry.LastModificationTime);
+		}
+	}
+
+	[Fact]
+	public void Import_RejectsMissingOrEmptyItemId()
+	{
+		string itemId = "\"id\":\"" + ItemId + "\",";
+		string[] invalidDocuments =
+		{
+			(Prefix + Passkey + Suffix).Replace(itemId, string.Empty),
+			(Prefix + Passkey + Suffix).Replace(itemId, "\"id\":\"\","),
+		};
+
+		foreach (string document in invalidDocuments)
+		{
+			var database = NewDatabase();
+			using (var input = JsonStream(document))
+			{
+				Assert.Throws<InvalidDataException>(() => new CxfFileFormatProvider().Import(database, input, new TestStatusLogger()));
+				Assert.Equal((uint)0, database.RootGroup.GetEntries(true).UCount);
+			}
 		}
 	}
 

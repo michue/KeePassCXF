@@ -8,7 +8,9 @@ using KeePass.DataExchange;
 using KeePassCXF;
 using KeePassLib;
 using KeePassLib.Interfaces;
+using KeePassLib.Keys;
 using KeePassLib.Security;
+using KeePassLib.Serialization;
 using Xunit;
 
 namespace KeePassCXFPlugin.Tests;
@@ -25,12 +27,15 @@ public class CxfExportWriterTests
 	public void Export_WritesPasskeyAsCxfJsonAndUsesPkcs8DerBase64Url()
 	{
 		byte[] der = { 0x30, 0x03, 0x02, 0x01, 0x01 };
+		var database = NewDatabase();
 		var entry = NewPasskeyEntry(der);
-		var group = new PwGroup(true, true) { Name = "Root" };
-		group.AddEntry(entry, true);
+		var secondEntry = NewPasskeyEntry(der);
+		secondEntry.Strings.Set(PwDefs.TitleField, new ProtectedString(false, "Second passkey"));
+		database.RootGroup.AddEntry(entry, true);
+		database.RootGroup.AddEntry(secondEntry, true);
 		using var output = new MemoryStream();
 
-		bool exported = CxfExportWriter.Export(new PwExportInfo(group, null), output, new TestStatusLogger());
+		bool exported = CxfExportWriter.Export(new PwExportInfo(database.RootGroup, database), output, new TestStatusLogger());
 
 		Assert.True(exported);
 		var json = Encoding.UTF8.GetString(output.ToArray());
@@ -40,6 +45,11 @@ public class CxfExportWriterTests
 		Assert.Contains("\"major\":1", compactJson);
 		Assert.Contains("\"minor\":0", compactJson);
 		Assert.Contains("\"exporterDisplayName\":\"KeePassCXF\"", compactJson);
+		Assert.Contains("\"id\":\"" + EncodeBase64Url(database.RootGroup.Uuid.UuidBytes) + "\",\"username\":\"cxf-import-test.kdbx\"", compactJson);
+		Assert.Contains("\"id\":\"" + EncodeBase64Url(entry.Uuid.UuidBytes) + "\"", compactJson);
+		Assert.Contains("\"id\":\"" + EncodeBase64Url(secondEntry.Uuid.UuidBytes) + "\"", compactJson);
+		Assert.Equal(1, Regex.Matches(compactJson, "\\\"accounts\\\":\\[\\{").Count);
+		Assert.Equal(2, Regex.Matches(compactJson, "\\\"type\\\":\\\"passkey\\\"").Count);
 		Assert.Contains("\"type\":\"passkey\"", compactJson);
 		Assert.Contains("\"credentialId\":\"Y3JlZGVudGlhbElk\"", compactJson);
 		Assert.Contains("\"rpId\":\"example.com\"", compactJson);
@@ -53,15 +63,16 @@ public class CxfExportWriterTests
 	[Fact]
 	public void Export_SkipsEntriesWithoutPasskeys()
 	{
-		var group = new PwGroup(true, true);
-		group.AddEntry(new PwEntry(true, true), true);
+		var database = NewDatabase();
+		database.RootGroup.AddEntry(new PwEntry(true, true), true);
 		using var output = new MemoryStream();
 
-		bool exported = CxfExportWriter.Export(new PwExportInfo(group, null), output, new TestStatusLogger());
+		bool exported = CxfExportWriter.Export(new PwExportInfo(database.RootGroup, database), output, new TestStatusLogger());
 
 		Assert.True(exported);
 		var json = Encoding.UTF8.GetString(output.ToArray());
-		Assert.Contains("\"accounts\":[]", Regex.Replace(json, @"\s+", string.Empty));
+		Assert.Contains("\"accounts\":[{", Regex.Replace(json, @"\s+", string.Empty));
+		Assert.Contains("\"items\":[]", Regex.Replace(json, @"\s+", string.Empty));
 	}
 
 	[Fact]
@@ -69,15 +80,25 @@ public class CxfExportWriterTests
 	{
 		var entry = NewPasskeyEntry(new byte[] { 0x30 });
 		entry.Strings.Set(FieldPrivateKey, new ProtectedString(true, "not a PEM key"));
-		var group = new PwGroup(true, true);
-		group.AddEntry(entry, true);
+		var database = NewDatabase();
+		database.RootGroup.AddEntry(entry, true);
 		using var output = new MemoryStream();
 
-		bool exported = CxfExportWriter.Export(new PwExportInfo(group, null), output, new TestStatusLogger());
+		bool exported = CxfExportWriter.Export(new PwExportInfo(database.RootGroup, database), output, new TestStatusLogger());
 
 		Assert.False(exported);
 		Assert.Equal(0, output.Length);
 	}
+
+	private static PwDatabase NewDatabase()
+	{
+		var database = new PwDatabase();
+		database.New(IOConnectionInfo.FromPath("cxf-import-test.kdbx"), new CompositeKey());
+		return database;
+	}
+
+	private static string EncodeBase64Url(byte[] value) =>
+		Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
 	private static PwEntry NewPasskeyEntry(byte[] der)
 	{
